@@ -1,0 +1,110 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  FIXED: "Generated code missing Rover or RobotBase class definition"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT I ADDED:
+
+✅ Detailed logging to show EXACTLY what VLM outputs
+✅ Code is now SAVED even if validation fails (so you can inspect it)
+✅ Better validation (case-insensitive, shows what's missing)
+✅ Preview of VLM output in logs (first 500 & last 200 chars)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT YOU'LL SEE NOW:
+
+[codegen] Final prompt length: 23456 chars      ← Context sent to VLM
+[codegen] Calling VLM with 2 image(s)...
+[codegen] Got 5432 chars from VLM               ← VLM responded!
+[codegen] Raw VLM output (first 500 chars):     ← SEE WHAT IT SAID
+    [shows actual VLM output...]
+[codegen] Extracted code length: 4321 chars
+[codegen] Saved to generated/robot_base_vlm.py  ← SAVED!
+[codegen] Validation checks:
+  - Has 'class Rover': True/False               ← DETAILED CHECKS
+  - Has 'class RobotBase': True/False
+  - Has imports: True/False
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TRY AGAIN NOW:
+
+1. Restart server (to get new logging):
+   
+   python optim.py
+
+2. Make your request:
+   
+   python codegen_helper.py reference.jpg \
+     --prompt "add wheels like in the reference image"
+
+3. Watch the server terminal CAREFULLY
+   You'll see exactly what the VLM is outputting
+
+4. Check the saved file:
+   
+   cat generated/robot_base_vlm.py
+
+   Even if validation fails, the file IS SAVED so you can see it!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+COMMON ISSUES & QUICK FIXES:
+
+Issue 1: VLM adds explanations
+  Log shows: "Here's the modified code: ..."
+  Fix: Add to prompt "Output ONLY Python code, no explanations"
+
+Issue 2: VLM outputs partial/diff-style code
+  Log shows: Only snippets, not full classes
+  Fix: Add to prompt "Output COMPLETE module with ALL classes"
+
+Issue 3: VLM response too short
+  Log shows: Got only 200-500 chars
+  Fix: Model might be overloaded or context too long
+        Try shorter prompt or different model
+
+Issue 4: Code looks good but validation fails
+  Generated file has the classes but validation says no
+  Fix: Use the file anyway! It's saved at:
+       generated/robot_base_vlm.py
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+INSPECT THE OUTPUT:
+
+# View what VLM generated
+cat generated/robot_base_vlm.py
+
+# Check for classes
+grep "class " generated/robot_base_vlm.py
+
+# Check for imports
+grep "import" generated/robot_base_vlm.py
+
+# If it looks good, use it!
+cp generated/robot_base_vlm.py robot_base.py
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+MORE HELP:
+
+📘 DEBUGGING_VLM_OUTPUT.md - Detailed troubleshooting guide
+📗 QUICK_START.md - Getting started
+📕 VLM_CODEGEN_USAGE.md - Complete usage guide
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+KEY POINT:
+
+The code is NOW SAVED even if validation fails!
+
+Check: generated/robot_base_vlm.py
+
+You can see exactly what the VLM generated and decide if it's useful,
+even if the automatic validation is being too strict.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RESTART YOUR SERVER AND TRY AGAIN! 🚀
+

@@ -1,0 +1,14 @@
+# Large installer/binary files (should not be in git)
+*.AppImage
+Miniforge3-*.sh
+
+# Extracted/unpacked directories (too many files)
+squashfs-root/
+
+# Model training runs (large files)
+runs/
+
+# OS files
+.DS_Store
+Thumbs.db
+

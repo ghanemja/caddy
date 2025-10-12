@@ -1,0 +1,22 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  {% include "partials/_head.html" %}
+  <body>
+    {% include "partials/_bar.html" %}
+    {% include "partials/_left_camera.html" %}
+    {% include "partials/_canvas.html" %}
+    <div id="right">
+      {% include "partials/_right_components.html" %}
+      {% include "partials/_right_vlm.html" %}
+      {% include "partials/_right_upload.html" %}
+      {% include "partials/_right_recs.html" %}
+      {% include "partials/_gen.html" %}
+    </div>
+    {% include "partials/_console.html" %}
+
+    <!-- External module script (recommended) -->
+    <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+  </body>
+</html>
+

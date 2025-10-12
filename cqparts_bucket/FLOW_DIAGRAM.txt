@@ -1,0 +1,305 @@
+
+VLM CODE GENERATION FLOW
+═════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                         USER INPUTS                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│  1. Reference Image (target_design.jpg)                             │
+│  2. CAD Snapshot (current_model.png) [optional]                     │
+│  3. User Intent Text: "Make it 40mm longer, add more wheels"        │
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │
+                           │ POST /codegen
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    optim.py: /codegen endpoint                      │
+│                         (Line 1014)                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│  • Receives files and prompt text                                   │
+│  • Converts images to base64 data URLs                              │
+│  • Calls _build_codegen_prompt()                                    │
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│            _baseline_cqparts_source() → Line 2042                   │
+├─────────────────────────────────────────────────────────────────────┤
+│  EXTRACTS SOURCE CODE AS STRING VARIABLE:                           │
+│                                                                      │
+│  1. import robot_base as _rb                                        │
+│  2. mod_src = inspect.getsource(_rb)  ← YOUR PYTHON FILE!           │
+│  3. chunks.append(mod_src)                                          │
+│  4. Also gets: Rover, RobotBase, Wheel, PanTilt classes             │
+│  5. Merges: "\n\n# ----\n\n".join(chunks)                          │
+│  6. Strips docstrings and comments                                  │
+│  7. Returns: STRING containing your robot_base.py                   │
+│                                                                      │
+│  RESULT: baseline_src = "import cadquery...\nclass Rover..."       │
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│            _build_codegen_prompt() → Line 955                       │
+├─────────────────────────────────────────────────────────────────────┤
+│  ASSEMBLES COMPLETE PROMPT:                                         │
+│                                                                      │
+│  parts = [                                                          │
+│    VLM_CODEGEN_PROMPT,              # Instructions                  │
+│    "<<<BASELINE_PYTHON_SOURCE>>>",                                  │
+│    baseline_src,                    # ← YOUR SOURCE HERE!           │
+│    "<<<END_BASELINE_PYTHON_SOURCE>>>",                              │
+│    json.dumps(cad_state),          # Current params                 │
+│    user_text,                      # Your intent                    │
+│  ]                                                                  │
+│                                                                      │
+│  RESULT: Complete prompt string + list of image URLs                │
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                 call_vlm() → Line 1112                              │
+├─────────────────────────────────────────────────────────────────────┤
+│  SENDS TO OLLAMA/LLAVA:                                             │
+│                                                                      │
+│  payload = {                                                        │
+│    "model": "llava-llama3:latest",                                  │
+│    "system": VLM_CODEGEN_PROMPT,   # Instructions                   │
+│    "prompt": final_prompt,         # Source + state + intent        │
+│    "images": [ref_b64, snap_b64],  # Base64 encoded images          │
+│    "options": {                                                     │
+│      "temperature": 0.0,           # Deterministic                  │
+│      "stop": ["# END_OF_MODULE"]   # Stop token                     │
+│    }                                                                │
+│  }                                                                  │
+│                                                                      │
+│  POST → http://localhost:11434/api/generate                         │
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │
+                           │ VLM Processing...
+                           │ (analyzing images + reading source code)
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      VLM MODEL OUTPUT                               │
+├─────────────────────────────────────────────────────────────────────┤
+│  PURE PYTHON CODE (no markdown, no explanations):                   │
+│                                                                      │
+│  import cadquery as cq                                              │
+│  import cqparts                                                     │
+│  from cqparts.params import PositiveFloat                           │
+│  ...                                                                │
+│                                                                      │
+│  class RobotBase(Lasercut):                                         │
+│      length = PositiveFloat(320)      # CHANGED: 280 → 320         │
+│      width = PositiveFloat(240)                                     │
+│      ...                                                            │
+│                                                                      │
+│  class Rover(cqparts.Assembly):                                     │
+│      length = PositiveFloat(320)      # CHANGED                     │
+│      wheels_per_side = PositiveFloat(3)  # CHANGED: 2 → 3          │
+│      ...                                                            │
+│                                                                      │
+│  # END_OF_MODULE                                                    │
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│            extract_python_module() → Line 1193                      │
+├─────────────────────────────────────────────────────────────────────┤
+│  VALIDATES AND CLEANS:                                              │
+│                                                                      │
+│  1. Strip markdown fences: ```python ... ```                        │
+│  2. Remove explanatory text before/after code                       │
+│  3. Try to parse with ast.parse()                                   │
+│  4. If invalid: try progressive trimming                            │
+│  5. Return clean Python code OR raise ValueError                    │
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    VALIDATION CHECKS                                │
+├─────────────────────────────────────────────────────────────────────┤
+│  ✓ Contains "class Rover" or "class RobotBase"                     │
+│  ✓ Syntactically valid Python 3.10                                 │
+│  ✓ Has proper imports                                              │
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      SAVE TO FILES                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│  generated/                                                         │
+│  ├── robot_base_vlm.py              ← Latest version                │
+│  └── robot_base_vlm_1704123456.py   ← Timestamped backup            │
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    OPTIONAL: REBUILD GLB                            │
+├─────────────────────────────────────────────────────────────────────┤
+│  Try to rebuild the 3D model with new parameters                    │
+│  (May fail if code needs manual integration)                        │
+└──────────────────────────┬──────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    RETURN JSON RESPONSE                             │
+├─────────────────────────────────────────────────────────────────────┤
+│  {                                                                  │
+│    "ok": true,                                                      │
+│    "module_path": "generated/robot_base_vlm.py",                    │
+│    "backup_path": "generated/robot_base_vlm_1704123456.py",         │
+│    "code_length": 8542,                                             │
+│    "glb_updated": false,                                            │
+│    "message": "Review and integrate manually if needed"             │
+│  }                                                                  │
+└─────────────────────────────────────────────────────────────────────┘
+
+
+
+KEY FUNCTIONS AND THEIR ROLES
+══════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────────────────────────────────────────────┐
+│ Function Name              │ Line  │ Purpose                     │
+├────────────────────────────┼───────┼─────────────────────────────┤
+│ _baseline_cqparts_source() │ 2042  │ Extracts robot_base.py      │
+│                            │       │ as STRING variable          │
+├────────────────────────────┼───────┼─────────────────────────────┤
+│ _build_codegen_prompt()    │ 955   │ Assembles prompt with       │
+│                            │       │ source code + images        │
+├────────────────────────────┼───────┼─────────────────────────────┤
+│ call_vlm()                 │ 1112  │ Sends to Ollama/LLaVA       │
+├────────────────────────────┼───────┼─────────────────────────────┤
+│ extract_python_module()    │ 1193  │ Validates VLM output        │
+├────────────────────────────┼───────┼─────────────────────────────┤
+│ /codegen endpoint          │ 1014  │ Main API handler            │
+└────────────────────────────┴───────┴─────────────────────────────┘
+
+
+
+WHAT HAPPENS TO YOUR PYTHON FILE
+══════════════════════════════════════════════════════════════════════
+
+robot_base.py (on disk)
+     │
+     │ import robot_base
+     │ inspect.getsource(robot_base)
+     │
+     ▼
+baseline_src (string variable)
+     │
+     │ Contains:
+     │ "import cadquery as cq\n"
+     │ "import cqparts\n"
+     │ "class RobotBase(Lasercut):\n"
+     │ "    length = PositiveFloat(250)\n"
+     │ "    ...\n"
+     │
+     ▼
+VLM Prompt (inserted)
+     │
+     │ "<<<BASELINE_PYTHON_SOURCE>>>\n"
+     │ + baseline_src
+     │ + "<<<END_BASELINE_PYTHON_SOURCE>>>\n"
+     │
+     ▼
+VLM reads it (processes string)
+     │
+     │ VLM understands:
+     │ - Current class structure
+     │ - Parameter names and values
+     │ - Method signatures
+     │ - Import statements
+     │
+     ▼
+VLM outputs modified version
+     │
+     │ "class RobotBase(Lasercut):\n"
+     │ "    length = PositiveFloat(320)\n"  ← MODIFIED
+     │ "    ...\n"
+     │
+     ▼
+Saved to generated/robot_base_vlm.py
+
+
+
+USAGE EXAMPLES
+══════════════════════════════════════════════════════════════════════
+
+Example 1: Simple change
+─────────────────────────────────────────────────────────────────────
+$ python codegen_helper.py reference.jpg --prompt "Make it longer"
+
+VLM sees:
+  • reference.jpg (your target)
+  • Current robot_base.py source (extracted via inspect.getsource)
+  • "Make it longer" (your intent)
+
+VLM outputs:
+  • Modified robot_base.py with increased length parameter
+
+
+Example 2: Complex change with comparison
+─────────────────────────────────────────────────────────────────────
+$ python codegen_helper.py target.jpg \
+    --snapshot current.png \
+    --prompt "Target: 320mm long, 3 wheels per side, 75mm diameter"
+
+VLM sees:
+  • target.jpg (reference design)
+  • current.png (current CAD for comparison)
+  • robot_base.py source code
+  • Specific numerical targets
+
+VLM outputs:
+  • Modified robot_base.py with:
+    - length = PositiveFloat(320)
+    - wheels_per_side = PositiveFloat(3)
+    - ThisWheel diameter = PositiveFloat(75)
+
+
+Example 3: curl API call
+─────────────────────────────────────────────────────────────────────
+$ curl -X POST http://localhost:5160/codegen \
+  -F "reference=@design.jpg" \
+  -F "prompt=Add 2 more wheels and widen the base"
+
+Returns:
+{
+  "ok": true,
+  "module_path": "generated/robot_base_vlm.py",
+  "code_length": 8234,
+  ...
+}
+
+
+
+DEBUGGING
+══════════════════════════════════════════════════════════════════════
+
+If something goes wrong:
+
+1. Check generated/robot_base_vlm.reject_*.txt
+   → Raw VLM output (if validation failed)
+
+2. Check server logs
+   → print() statements show what's happening
+
+3. Verify source extraction:
+   >>> from optim import _baseline_cqparts_source
+   >>> src = _baseline_cqparts_source()
+   >>> print(src[:500])  # Check first 500 chars
+
+4. Test prompt building:
+   >>> from optim import _build_codegen_prompt
+   >>> prompt, imgs = _build_codegen_prompt("ref.jpg", None, "test")
+   >>> print(prompt[:1000])  # Verify structure
+
+
+═════════════════════════════════════════════════════════════════════
+END OF FLOW DIAGRAM
+═════════════════════════════════════════════════════════════════════
+
