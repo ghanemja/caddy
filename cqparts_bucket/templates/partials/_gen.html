@@ -1,20 +1,41 @@
 <!-- _gen.html -->
-<section class="section" id="codegen">
-  <div class="row">
-    <h3>Codegen</h3>
+<div class="section" id="codegen">
+  <header>
+    <h3>Code Generation</h3>
     <button class="toggle" data-target="codegen">Collapse</button>
-  </div>
+  </header>
+  <div class="section-body">
+    <div class="row" style="justify-content: space-between">
+      <div id="codegenStatus" class="pill" style="opacity: 0.8">No code generated yet</div>
+    </div>
+    
+    <div class="stack" style="margin-top: 12px">
+      <label>Reference image</label>
+      <input id="ref" type="file" accept="image/*" />
+    </div>
 
-  <div class="stack">
-    <label>Reference image</label>
-    <input id="ref" type="file" accept="image/*" />
-  </div>
+    <div class="stack">
+      <label>Optional snapshot (manual)</label>
+      <input id="snap" type="file" accept="image/*" />
+    </div>
 
-  <div class="stack">
-    <label>Optional snapshot (manual)</label>
-    <input id="snap" type="file" accept="image/*" />
+    <!-- You already have #prompt on the page; do NOT duplicate it -->
+    <button id="btn-codegen" style="margin-top: 6px; width: 100%; text-align: center" class="btn">Generate Code</button>
+    
+    <!-- Generated code display area -->
+    <div id="codegenOutput" style="display: none; margin-top: 12px">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px">
+        <label style="font-weight: 600; font-size: 13px">Generated Code:</label>
+        <button id="copyCode" style="padding: 4px 8px; font-size: 11px">Copy</button>
+      </div>
+      <textarea 
+        id="codegenText" 
+        readonly 
+        style="width: 100%; height: 200px; font-family: monospace; font-size: 11px; resize: vertical; background: #f8fafc; border: 1px solid #cbd5e1; padding: 8px; border-radius: 4px"
+      ></textarea>
+      <div style="font-size: 11px; color: #64748b; margin-top: 4px">
+        Code saved to: <code style="background: #f1f5f9; padding: 2px 4px; border-radius: 2px">generated/robot_base_vlm.py</code>
+      </div>
+    </div>
   </div>
-
-  <!-- You already have #prompt on the page; do NOT duplicate it -->
-  <button id="btn-codegen">Generate Code</button>
-</section>
+</div>

@@ -8,6 +8,9 @@ squashfs-root/
 # Model training runs (large files)
 runs/
 
+# Conda temporary files
+condaenv.*.requirements.txt
+
 # OS files
 .DS_Store
 Thumbs.db

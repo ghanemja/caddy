@@ -26,12 +26,59 @@ import importlib.util
 
 
 def load_freecad():
-    path = "/home/ec2-user/Documents/cad-optimizer/squashfs-root/usr/lib/FreeCAD.so"
-    spec = importlib.util.spec_from_file_location("FreeCAD", path)
-    FreeCAD = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(FreeCAD)
-    sys.modules["FreeCAD"] = FreeCAD
-    return FreeCAD
+    """
+    Load FreeCAD module. Tries multiple locations:
+    1. Direct import (if available in Python path)
+    2. Conda environment lib directory
+    3. Extracted AppImage location
+    """
+    # Try 1: Direct import (conda-installed FreeCAD may work this way)
+    try:
+        import FreeCAD
+        print("[freecad] ✓ Loaded FreeCAD from system/conda")
+        return FreeCAD
+    except ImportError:
+        pass
+    
+    # Try 2: Load from conda environment's lib directory
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        conda_freecad_path = os.path.join(conda_prefix, "lib", "FreeCAD.so")
+        if os.path.exists(conda_freecad_path):
+            try:
+                spec = importlib.util.spec_from_file_location("FreeCAD", conda_freecad_path)
+                FreeCAD = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(FreeCAD)
+                sys.modules["FreeCAD"] = FreeCAD
+                print(f"[freecad] ✓ Loaded FreeCAD from conda: {conda_freecad_path}")
+                return FreeCAD
+            except Exception as e:
+                print(f"[freecad] ⚠ Failed to load from conda: {e}")
+    
+    # Try 3: Load from AppImage extraction directory
+    appimage_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), 
+        "squashfs-root", "usr", "lib", "FreeCAD.so"
+    )
+    if os.path.exists(appimage_path):
+        try:
+            spec = importlib.util.spec_from_file_location("FreeCAD", appimage_path)
+            FreeCAD = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(FreeCAD)
+            sys.modules["FreeCAD"] = FreeCAD
+            print(f"[freecad] ✓ Loaded FreeCAD from AppImage: {appimage_path}")
+            return FreeCAD
+        except Exception as e:
+            print(f"[freecad] ⚠ Failed to load from AppImage: {e}")
+    
+    # If all methods fail, raise error with helpful message
+    raise ImportError(
+        "Could not load FreeCAD module. Tried:\n"
+        f"  1. Direct import from Python path\n"
+        f"  2. Conda environment: {conda_freecad_path if conda_prefix else 'N/A'}\n"
+        f"  3. AppImage: {appimage_path}\n"
+        "Install FreeCAD with: conda install -c conda-forge freecad"
+    )
 
 
 FreeCAD = load_freecad()
@@ -48,11 +95,92 @@ from sensor_fork import SensorFork
 mimetypes.add_type("application/javascript", ".js")
 
 # ----------------- VLM config -----------------
+USE_FINETUNED_MODEL = os.environ.get("USE_FINETUNED_MODEL", "1") == "1"  # Use fine-tuned by default
+FINETUNED_MODEL_PATH = os.environ.get(
+    "FINETUNED_MODEL_PATH", 
+    "/home/ec2-user/Documents/cad-optimizer/runs/onevision_lora_small"
+)
 OLLAMA_URL = os.environ.get(
     "OLLAMA_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 ).rstrip("/")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llava-llama3:latest")
 LLAVA_URL = os.environ.get("LLAVA_URL")  # optional
+
+# Global variable to hold the fine-tuned model and processor
+_finetuned_model = None
+_finetuned_processor = None
+
+
+def load_finetuned_model():
+    """Load the fine-tuned VLM model with LoRA adapter."""
+    global _finetuned_model, _finetuned_processor
+    
+    if not USE_FINETUNED_MODEL:
+        print("[vlm] Fine-tuned model disabled, will use Ollama/LLAVA")
+        return
+    
+    if _finetuned_model is not None:
+        print("[vlm] Fine-tuned model already loaded")
+        return
+    
+    try:
+        print(f"[vlm] Loading fine-tuned model from {FINETUNED_MODEL_PATH}...")
+        
+        # Import necessary libraries
+        from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
+        from peft import PeftModel
+        import torch
+        
+        # Load base model
+        base_model_name = "llava-hf/llava-onevision-qwen2-7b-ov-hf"
+        print(f"[vlm] Loading base model: {base_model_name}")
+        
+        # Check if CUDA is available
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"[vlm] Using device: {device}")
+        
+        # Load processor
+        print(f"[vlm] Loading processor...")
+        _finetuned_processor = AutoProcessor.from_pretrained(base_model_name)
+        print(f"[vlm] ✓ Processor loaded")
+        
+        # Load base model with optimizations for faster loading
+        print(f"[vlm] Loading base model (this may take 2-3 minutes)...")
+        base_model = LlavaOnevisionForConditionalGeneration.from_pretrained(
+            base_model_name,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            device_map="auto" if device == "cuda" else None,
+            low_cpu_mem_usage=True,
+            # Speed up loading by using safetensors
+            use_safetensors=True,
+        )
+        print(f"[vlm] ✓ Base model loaded to {device}")
+        
+        # Load LoRA adapter
+        print(f"[vlm] Loading LoRA adapter from {FINETUNED_MODEL_PATH}")
+        _finetuned_model = PeftModel.from_pretrained(
+            base_model,
+            FINETUNED_MODEL_PATH,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+        )
+        
+        # Set to evaluation mode
+        _finetuned_model.eval()
+        
+        print(f"[vlm] ✓ Fine-tuned model loaded successfully on {device}")
+        
+    except ImportError as e:
+        print(f"[vlm] ✗ Failed to import required libraries: {e}")
+        print("[vlm] Install with: pip install transformers peft torch pillow accelerate")
+        _finetuned_model = None
+        _finetuned_processor = None
+    except Exception as e:
+        print(f"[vlm] ✗ Failed to load fine-tuned model: {e}")
+        import traceback
+        traceback.print_exc()
+        _finetuned_model = None
+        _finetuned_processor = None
+
 
 # ----------------- Aliases -----------------
 TARGET_ALIASES = {
@@ -1426,6 +1554,90 @@ def call_vlm(
 
     images_payload = _normalize(image_data_urls)
     err = None
+    
+    # Try fine-tuned model first (load lazily if not already loaded)
+    if USE_FINETUNED_MODEL:
+        if _finetuned_model is None:
+            print("[vlm] Model not loaded yet, loading now (this will take 2-3 minutes)...")
+            load_finetuned_model()
+        
+        if _finetuned_model is not None and _finetuned_processor is not None:
+            try:
+                print("[vlm] Using fine-tuned model...")
+                import torch
+                from PIL import Image
+                import io
+                import base64
+                
+                # Prepare images
+                images = []
+                if images_payload:
+                    for img_b64 in images_payload:
+                        img_bytes = base64.b64decode(img_b64)
+                        img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+                        images.append(img)
+                
+                # Prepare the conversation format
+                system_prompt = VLM_CODEGEN_PROMPT if not expect_json else VLM_SYSTEM_PROMPT
+                
+                # Format as conversation (LLaVA OneVision format)
+                conversation = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": system_prompt + "\n\n" + final_prompt}
+                        ]
+                    }
+                ]
+                
+                # Add images to the user message
+                if images:
+                    for img in images:
+                        conversation[0]["content"].insert(0, {"type": "image"})
+                
+                # Apply chat template and process
+                prompt_text = _finetuned_processor.apply_chat_template(
+                    conversation, 
+                    add_generation_prompt=True
+                )
+                
+                # Process inputs
+                inputs = _finetuned_processor(
+                    images=images if images else None,
+                    text=prompt_text,
+                    return_tensors="pt"
+                )
+                
+                # Move to same device as model
+                device = next(_finetuned_model.parameters()).device
+                inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
+                         for k, v in inputs.items()}
+                
+                print(f"[vlm] Generating response...")
+                
+                # Generate
+                with torch.no_grad():
+                    output_ids = _finetuned_model.generate(
+                        **inputs,
+                        max_new_tokens=2048 if not expect_json else 1024,
+                        temperature=0.1,
+                        top_p=0.9,
+                        do_sample=True,
+                    )
+                
+                # Decode response
+                generated_ids = output_ids[0][inputs['input_ids'].shape[1]:]
+                response = _finetuned_processor.decode(generated_ids, skip_special_tokens=True)
+                
+                print(f"[vlm] ✓ Got response from fine-tuned model: {len(response)} chars")
+                return {"provider": "finetuned", "raw": response}
+                
+            except Exception as e:
+                err = f"Fine-tuned model error: {e}"
+                print(f"[vlm] ✗ Fine-tuned model failed: {err}")
+                import traceback
+                traceback.print_exc()
+                # Fall back to Ollama
     
     # Handle models that only support 1 image (like llama3.2-vision)
     # If we have 2 images, stitch them side-by-side
@@ -2948,5 +3160,14 @@ def _warm_build():
 
 if __name__ == "__main__":
     os.makedirs(ASSETS_DIR, exist_ok=True)
+    
+    # Don't load model on startup - load it lazily on first use
+    # This makes the server start in seconds instead of minutes
+    if USE_FINETUNED_MODEL:
+        print("[startup] Fine-tuned VLM model will load on first request (lazy loading)")
+        print("[startup] This makes server start fast - first VLM request will take 2-3 min")
+    else:
+        print("[startup] Using Ollama/LLAVA for VLM")
+    
     threading.Thread(target=_warm_build, daemon=True).start()
     app.run(host="0.0.0.0", port=PORT, debug=False)

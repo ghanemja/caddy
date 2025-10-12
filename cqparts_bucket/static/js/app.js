@@ -787,14 +787,35 @@ panSpd.oninput = () => {
 const refEl = document.getElementById('ref');
 const snapEl = document.getElementById('snap');
 const btn = document.getElementById('btn-codegen');
+const codegenStatus = document.getElementById('codegenStatus');
+const codegenOutput = document.getElementById('codegenOutput');
+const codegenText = document.getElementById('codegenText');
+const copyCodeBtn = document.getElementById('copyCode');
 
 async function refreshModel() {
   await loadModel();       // reload the GLB into your Three.js scene
   await refreshParamsHint();
 }
 
+// Copy code to clipboard
+copyCodeBtn.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(codegenText.value);
+    const originalText = copyCodeBtn.textContent;
+    copyCodeBtn.textContent = 'Copied!';
+    setTimeout(() => { copyCodeBtn.textContent = originalText; }, 2000);
+  } catch (e) {
+    console.error('Failed to copy:', e);
+    alert('Failed to copy code to clipboard');
+  }
+});
+
 btn.addEventListener('click', async () => {
-  if (!refEl.files[0]) { alert('Pick a reference image first.'); return; }
+  if (!refEl.files[0]) { 
+    alert('Pick a reference image first.'); 
+    return; 
+  }
+  
   const fd = new FormData();
   fd.append('reference', refEl.files[0]);
   if (snapEl.files[0]) fd.append('snapshot', snapEl.files[0]);
@@ -802,15 +823,44 @@ btn.addEventListener('click', async () => {
 
   btn.disabled = true;
   btn.textContent = 'Generating…';
+  codegenStatus.textContent = 'Generating code...';
+  codegenStatus.style.color = '#f59e0b';
+  
+  const loading = startLoadingLine('Generating code from VLM');
+  
   try {
     const res = await fetch('/codegen', { method: 'POST', body: fd });
     const json = await res.json();
-    if (!json.ok) throw new Error(json.error || 'Codegen failed');
+    
+    if (!json.ok) {
+      loading.stop('err', 'Code generation failed');
+      throw new Error(json.error || 'Codegen failed');
+    }
+    
+    // Display the generated code
+    if (json.code) {
+      codegenText.value = json.code;
+      codegenOutput.style.display = 'block';
+      logLine('✓ Code generated successfully');
+    }
+    
+    // Update status
+    codegenStatus.textContent = 'Code generated successfully';
+    codegenStatus.style.color = '#10b981';
+    
+    // Refresh the 3D model with new code
+    logLine('Rebuilding 3D model...');
     await refreshModel();
+    loading.stop('ok', 'Code generated and model updated');
+    logLine('✓ 3D model updated with new code');
+    
     btn.textContent = 'Generate Code ✓';
   } catch (e) {
     console.error(e);
-    alert(`Codegen error: ${e.message}`);
+    codegenStatus.textContent = 'Code generation failed';
+    codegenStatus.style.color = '#ef4444';
+    loading.stop('err', `Error: ${e.message}`);
+    logLine(`✗ Error: ${e.message}`, 'err');
     btn.textContent = 'Generate Code (retry)';
   } finally {
     btn.disabled = false;
