@@ -1380,6 +1380,7 @@ def codegen():
 
         return jsonify({
             "ok": True,
+            "code": code_txt,  # Include the generated code for display
             "module_path": mod_path,
             "backup_path": backup_path,
             "code_length": len(code_txt),
