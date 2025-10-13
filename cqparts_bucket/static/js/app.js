@@ -834,25 +834,57 @@ btn.addEventListener('click', async () => {
     
     if (!json.ok) {
       loading.stop('err', 'Code generation failed');
-      throw new Error(json.error || 'Codegen failed');
+      
+      // Show detailed validation errors if available
+      if (json.validation_failed) {
+        logLine('✗ Generated code failed validation:', 'err');
+        logLine(`  ${json.checks_failed} critical checks failed`, 'err');
+        logLine(`  Expected: ${json.expected_length}, Got: ${json.actual_lines} lines`, 'err');
+        
+        if (json.missing_components && json.missing_components.length > 0) {
+          logLine('  Missing:', 'err');
+          json.missing_components.forEach(c => logLine(`    - ${c}`, 'err'));
+        }
+        
+        if (json.suggestions && json.suggestions.length > 0) {
+          logLine('  Suggestions:', 'warn');
+          json.suggestions.forEach(s => logLine(`    • ${s}`, 'warn'));
+        }
+        
+        codegenStatus.textContent = `Validation failed (${json.checks_failed} issues)`;
+      } else {
+        logLine(`✗ Error: ${json.error}`, 'err');
+        codegenStatus.textContent = 'Code generation failed';
+      }
+      
+      codegenStatus.style.color = '#ef4444';
+      btn.textContent = 'Generate Code (retry)';
+      return;
     }
     
     // Display the generated code
     if (json.code) {
       codegenText.value = json.code;
       codegenOutput.style.display = 'block';
-      logLine('✓ Code generated successfully');
+      
+      const lines = json.code.split('\n').length;
+      logLine(`✓ Code generated: ${lines} lines, ${json.code_length} chars`);
     }
     
     // Update status
-    codegenStatus.textContent = 'Code generated successfully';
+    codegenStatus.textContent = `Code generated (${json.code_length} chars)`;
     codegenStatus.style.color = '#10b981';
     
-    // Refresh the 3D model with new code
-    logLine('Rebuilding 3D model...');
-    await refreshModel();
-    loading.stop('ok', 'Code generated and model updated');
-    logLine('✓ 3D model updated with new code');
+    // Refresh the 3D model with new code if GLB was rebuilt
+    if (json.glb_updated) {
+      logLine('Rebuilding 3D model with generated code...');
+      await refreshModel();
+      loading.stop('ok', 'Code generated and model updated');
+      logLine('✓ 3D model updated with new code');
+    } else {
+      loading.stop('warn', 'Code generated but model rebuild failed');
+      logLine('⚠ Model rebuild failed - check console for errors', 'warn');
+    }
     
     btn.textContent = 'Generate Code ✓';
   } catch (e) {

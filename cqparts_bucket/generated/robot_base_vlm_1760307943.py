@@ -79,10 +79,6 @@ class ThisStepper(Stepper):
     hole_spacing = PositiveFloat(15)
 
 class Rover(cqparts.Assembly):
-    length = PositiveFloat(280)
-    width = PositiveFloat(170)
-    chamfer = PositiveFloat(55)
-    thickness = PositiveFloat(6)
     wheels_per_side = PositiveFloat(4)  # default 4 per side (8 total)
     axle_spacing_mm = PositiveFloat(70)  # spacing along X between axles
     wheelbase_span_mm = PositiveFloat(0)  # if >0, evenly span this distance; overrides axle_spacing_mm
@@ -94,7 +90,7 @@ class Rover(cqparts.Assembly):
 
     def make_components(self):
         base = RobotBase(
-            length=self.length,
+            length=self.wheels_per_side * self.axle_spacing_mm,
             width=self.width,
             chamfer=self.chamfer,
             thickness=self.thickness,
@@ -107,7 +103,7 @@ class Rover(cqparts.Assembly):
         }
 
         offsets = self._axle_offsets()
-        for i, off in enumerate(self._axle_offsets()):
+        for i, off in enumerate(offsets):
             comps[f"Ldrive_{i}"] = MountedStepper(
                 stepper=self.stepper, driven=self.wheel, target=base
             )
@@ -121,18 +117,18 @@ class Rover(cqparts.Assembly):
         n = max(1, int(round(float(self.wheels_per_side))))
         if n == 1:
             return [
-                self.axle_spacing_mm
+                self.axle_spacing-mm
             ]  # single axle near the front chamfer
 
-        span = float(self.wheelbase_span_mm)
+        span = float(self.wheelbase_span-mm)
         if span > 0:
             step = span / (n - 1) if n > 1 else 0
             offs = [self.chamfer + i * step for i in range(n)]
         else:
-            step = float(self.axle_spacing_mm)
+            step = float(self.axle_spacing-mm)
             offs = [self.chamfer + i * step for i in range(n)]
 
-        max_off = self.length - self.chamfer
+        max_off = self.axle_spacing-mm
         offs = [min(max(o, self.chamfer), max_off) for o in offs]
         return offs
 
@@ -148,9 +144,7 @@ class Rover(cqparts.Assembly):
                 self.components["base"].mate_front(),
             ),
         ]
-        # Constrain each axle pair to rails at its offset
-        offsets = self._axle_offsets()
-        for i, off in enumerate(self._axle_offsets()):
+        for i, off in enumerate(offsets):
             c += [
                 Coincident(
                     self.components[f"Ldrive_{i}"].mate_corner(flip=1),
@@ -163,4 +157,4 @@ class Rover(cqparts.Assembly):
             ]
         return c
 
-# Register the rover model
+register(export="showcase", showcase="showcase")

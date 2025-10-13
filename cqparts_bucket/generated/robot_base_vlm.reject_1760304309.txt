@@ -1,0 +1,9 @@
+```json
+[
+  {
+    "search": "    wheels_per_side = PositiveFloat(6)  # default 6 per side (12 total)",
+    "replace": "    wheels_per_side = PositiveFloat(4)  # default 4 per side (8 total)",
+    "reason": "Reduce to 4 wheels per side"
+  }
+]
+```

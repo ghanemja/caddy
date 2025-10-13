@@ -125,7 +125,10 @@ def profile_to_cross_section(profile, lefthand=False, start_count=1, min_vertice
     # Utilities for building cross-section
     def get_xz(vertex):
         if isinstance(vertex, cadquery.Vector):
-            vertex = vertex.wrapped  # TODO: remove this, it's messy
+            try:
+                vertex = vertex.wrapped  # CadQuery 1.x
+            except AttributeError:
+                pass  # CadQuery 2.x - vertex is already FreeCAD object
         # where isinstance(vertex, FreeCAD.Base.Vector)
         return (vertex.x, vertex.z)
 
@@ -154,9 +157,13 @@ def profile_to_cross_section(profile, lefthand=False, start_count=1, min_vertice
         """
         Trace along edge and create a spline from the transformed verteces.
         """
-        curve = edge.wrapped.Curve  # FreeCADPart.Geom* (depending on type)
+        try:
+            edge_obj = edge.wrapped  # CadQuery 1.x
+        except AttributeError:
+            edge_obj = edge  # CadQuery 2.x
+        curve = edge_obj.Curve  # FreeCADPart.Geom* (depending on type)
         if edge.geomType() == 'CIRCLE':
-            iter_dist = edge.wrapped.ParameterRange[1] / vert_count
+            iter_dist = edge_obj.ParameterRange[1] / vert_count
         else:
             iter_dist = edge.Length() / vert_count
         points = []
@@ -171,9 +178,13 @@ def profile_to_cross_section(profile, lefthand=False, start_count=1, min_vertice
         Create an arc using edge's midpoint and endpoint.
         Only intended for use for vertical lines on the given profile.
         """
+        try:
+            edge_obj = edge.wrapped  # CadQuery 1.x
+        except AttributeError:
+            edge_obj = edge  # CadQuery 2.x
         return wp.threePointArc(
-            point1=transform(edge.wrapped.valueAt(edge.Length() / 2), z_offset),
-            point2=transform(edge.wrapped.valueAt(edge.Length()), z_offset),
+            point1=transform(edge_obj.valueAt(edge.Length() / 2), z_offset),
+            point2=transform(edge_obj.valueAt(edge.Length()), z_offset),
         )
 
     def apply_radial_line(wp, edge, z_offset=0):
@@ -183,7 +194,11 @@ def profile_to_cross_section(profile, lefthand=False, start_count=1, min_vertice
         return wp.lineTo(*transform(edge.endPoint(), z_offset))
 
     # Build cross-section
-    start_v = edges[0].startPoint().wrapped
+    start_pt = edges[0].startPoint()
+    try:
+        start_v = start_pt.wrapped  # CadQuery 1.x
+    except AttributeError:
+        start_v = start_pt  # CadQuery 2.x
     cross_section = cadquery.Workplane("XY") \
         .moveTo(*transform(start_v))
 
@@ -342,13 +357,23 @@ class Thread(cqparts.Part):
 
         # Making thread a valid solid
         # FIXME: this should be implemented inside cadquery itself
-        thread_shape = thread.objects[0].wrapped
+        try:
+            thread_shape = thread.objects[0].wrapped  # CadQuery 1.x
+            use_wrapped = True
+        except AttributeError:
+            thread_shape = thread.objects[0]  # CadQuery 2.x
+            use_wrapped = False
+            
         if not thread_shape.isValid():
             log.warning("thread shape not valid")
             new_thread = thread_shape.copy()
             new_thread.sewShape()
-            thread.objects[0].wrapped = FreeCADPart.Solid(new_thread)
-            if not thread.objects[0].wrapped.isValid():
+            solid = FreeCADPart.Solid(new_thread)
+            if use_wrapped:
+                thread.objects[0].wrapped = solid
+            else:
+                thread.objects[0] = solid
+            if not solid.isValid():
                 log.error("sewn thread STILL not valid")
                 raise SolidValidityError(
                     "created thread solid cannot be made watertight"

@@ -102,7 +102,7 @@ class Rover(cqparts.Assembly):
 
         comps = {
             "base": base,
-            "electronics": self.electronics(),
+            "electronics": self.electronics(target=base),
             "sensors": self.sensors(target=base),
         }
 
@@ -132,7 +132,7 @@ class Rover(cqparts.Assembly):
             step = float(self.axle_spacing_mm)
             offs = [self.chamfer + i * step for i in range(n)]
 
-        max_off = self.length - self.chamfer
+        max_off = self.axle_spacing_mm
         offs = [min(max(o, self.chamfer), max_off) for o in offs]
         return offs
 
@@ -162,5 +162,3 @@ class Rover(cqparts.Assembly):
                 ),
             ]
         return c
-
-# Register the rover model

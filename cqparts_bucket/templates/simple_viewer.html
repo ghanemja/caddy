@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GLB Model Viewer - Debug</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #1e293b; color: #e2e8f0; }
+    #info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.8);
+      padding: 15px;
+      border-radius: 8px;
+      font-size: 13px;
+      max-width: 400px;
+      z-index: 100;
+    }
+    #info h3 { margin-bottom: 10px; color: #60a5fa; }
+    #info .stat { margin: 5px 0; }
+    #info .label { color: #94a3b8; display: inline-block; width: 150px; }
+    #info .value { color: #fbbf24; font-weight: 600; }
+    #controls {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0,0,0,0.8);
+      padding: 15px;
+      border-radius: 8px;
+      z-index: 100;
+    }
+    button {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin: 5px 0;
+      display: block;
+      width: 100%;
+    }
+    button:hover { background: #2563eb; }
+    #geometryList {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.8);
+      padding: 15px;
+      border-radius: 8px;
+      max-height: 300px;
+      overflow-y: auto;
+      z-index: 100;
+      font-size: 12px;
+      max-width: 300px;
+    }
+    #geometryList h4 { color: #60a5fa; margin-bottom: 8px; }
+    #geometryList .item { 
+      padding: 3px 0; 
+      border-bottom: 1px solid #334155;
+      font-family: monospace;
+    }
+    #geometryList .item:last-child { border: none; }
+    #geometryList .wheel { color: #10b981; }
+    #geometryList .base { color: #f59e0b; }
+    #geometryList .other { color: #94a3b8; }
+    #canvas { width: 100vw; height: 100vh; display: block; }
+    .highlight { background: #fbbf24; color: #000; padding: 2px 4px; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <div id="info">
+    <h3>🔍 GLB Model Inspector</h3>
+    <div class="stat"><span class="label">Source:</span> <span class="value" id="source">Loading...</span></div>
+    <div class="stat"><span class="label">File Size:</span> <span class="value" id="fileSize">-</span></div>
+    <div class="stat"><span class="label">Total Objects:</span> <span class="value" id="totalObjects">-</span></div>
+    <div class="stat"><span class="label">Wheel Objects:</span> <span class="value highlight" id="wheelCount">-</span></div>
+    <div class="stat"><span class="label">Vertices:</span> <span class="value" id="vertices">-</span></div>
+    <div class="stat"><span class="label">Triangles:</span> <span class="value" id="triangles">-</span></div>
+  </div>
+
+  <div id="controls">
+    <button id="reloadOriginal">Load Original (robot_base.py)</button>
+    <button id="reloadGenerated">Load Generated (robot_base_vlm.py)</button>
+    <button id="fitView">Fit to View</button>
+    <button id="toggleWireframe">Toggle Wireframe</button>
+  </div>
+
+  <div id="geometryList">
+    <h4>Scene Objects:</h4>
+    <div id="objectsList"></div>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <script type="module">
+    import * as THREE from "/static/jsm/three.module.js";
+    import { OrbitControls } from "/static/jsm/controls/OrbitControls.js";
+    import { GLTFLoader } from "/static/jsm/loaders/GLTFLoader.js";
+
+    // Setup scene
+    const canvas = document.getElementById('canvas');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1e293b);
+    
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 10000);
+    camera.position.set(400, 400, 400);
+    
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    
+    const controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(100, 100, 100);
+    scene.add(directionalLight);
+    
+    // Grid
+    const gridHelper = new THREE.GridHelper(500, 20, 0x475569, 0x334155);
+    scene.add(gridHelper);
+    
+    // Model container
+    let currentModel = null;
+    let currentSource = "none";
+
+    function clearModel() {
+      if (currentModel) {
+        scene.remove(currentModel);
+        currentModel.traverse(obj => {
+          if (obj.geometry) obj.geometry.dispose();
+          if (obj.material) obj.material.dispose();
+        });
+        currentModel = null;
+      }
+    }
+
+    function analyzeModel(gltf) {
+      const model = gltf.scene;
+      let totalObjects = 0;
+      let wheelObjects = 0;
+      let vertices = 0;
+      let triangles = 0;
+      const objectNames = [];
+
+      model.traverse(obj => {
+        totalObjects++;
+        if (obj.name) {
+          objectNames.push(obj.name);
+          if (obj.name.toLowerCase().includes('wheel')) {
+            wheelObjects++;
+          }
+        }
+        if (obj.geometry) {
+          if (obj.geometry.attributes.position) {
+            vertices += obj.geometry.attributes.position.count;
+          }
+          if (obj.geometry.index) {
+            triangles += obj.geometry.index.count / 3;
+          }
+        }
+      });
+
+      return { totalObjects, wheelObjects, vertices, triangles, objectNames };
+    }
+
+    function displayAnalysis(stats, fileSize) {
+      document.getElementById('totalObjects').textContent = stats.totalObjects;
+      document.getElementById('wheelCount').textContent = stats.wheelObjects;
+      document.getElementById('vertices').textContent = stats.vertices.toLocaleString();
+      document.getElementById('triangles').textContent = Math.floor(stats.triangles).toLocaleString();
+      document.getElementById('fileSize').textContent = (fileSize / 1024).toFixed(1) + ' KB';
+
+      const list = document.getElementById('objectsList');
+      list.innerHTML = '';
+      
+      // Group and count objects
+      const grouped = {};
+      stats.objectNames.forEach(name => {
+        if (!name) return;
+        const key = name.split('/')[0] || 'root';
+        grouped[key] = (grouped[key] || 0) + 1;
+      });
+
+      Object.entries(grouped).sort((a, b) => b[1] - a[1]).forEach(([name, count]) => {
+        const div = document.createElement('div');
+        div.className = 'item';
+        if (name.toLowerCase().includes('wheel')) div.classList.add('wheel');
+        else if (name.toLowerCase().includes('rover') || name.toLowerCase().includes('base')) div.classList.add('base');
+        else div.classList.add('other');
+        div.textContent = `${name}: ${count}`;
+        list.appendChild(div);
+      });
+    }
+
+    async function loadModel(url, source) {
+      clearModel();
+      document.getElementById('source').textContent = 'Loading...';
+
+      try {
+        const response = await fetch(url);
+        const arrayBuffer = await response.arrayBuffer();
+        const fileSize = arrayBuffer.byteLength;
+
+        const loader = new GLTFLoader();
+        const gltf = await new Promise((resolve, reject) => {
+          loader.parse(arrayBuffer, '', resolve, reject);
+        });
+
+        currentModel = gltf.scene;
+        currentModel.rotation.x = -Math.PI / 2; // Z-up to Y-up
+        scene.add(currentModel);
+        
+        const stats = analyzeModel(gltf);
+        displayAnalysis(stats, fileSize);
+        
+        currentSource = source;
+        document.getElementById('source').textContent = source;
+        
+        fitToView();
+        
+        console.log('Model loaded:', source);
+        console.log('Statistics:', stats);
+        console.log('Object names:', stats.objectNames);
+      } catch (error) {
+        console.error('Failed to load model:', error);
+        document.getElementById('source').textContent = 'ERROR: ' + error.message;
+      }
+    }
+
+    function fitToView() {
+      if (!currentModel) return;
+      
+      const box = new THREE.Box3().setFromObject(currentModel);
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const fov = camera.fov * (Math.PI / 180);
+      let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+      cameraZ *= 1.5; // Add some padding
+
+      camera.position.set(center.x + cameraZ, center.y + cameraZ, center.z + cameraZ);
+      camera.lookAt(center);
+      controls.target.copy(center);
+      controls.update();
+    }
+
+    let wireframeMode = false;
+    function toggleWireframe() {
+      wireframeMode = !wireframeMode;
+      if (currentModel) {
+        currentModel.traverse(obj => {
+          if (obj.material) {
+            obj.material.wireframe = wireframeMode;
+          }
+        });
+      }
+    }
+
+    // Controls
+    document.getElementById('reloadOriginal').onclick = () => {
+      loadModel('/model.glb?ts=' + Date.now(), 'Original (robot_base.py)');
+    };
+
+    document.getElementById('reloadGenerated').onclick = () => {
+      loadModel('/model.glb?use_generated=1&ts=' + Date.now(), 'Generated (robot_base_vlm.py)');
+    };
+
+    document.getElementById('fitView').onclick = fitToView;
+    document.getElementById('toggleWireframe').onclick = toggleWireframe;
+
+    // Animation loop
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // Handle window resize
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Auto-load on start
+    loadModel('/model.glb?ts=' + Date.now(), 'Current model.glb');
+  </script>
+</body>
+</html>
+

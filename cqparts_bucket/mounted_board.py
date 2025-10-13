@@ -83,11 +83,19 @@ class MountedBoard(cqparts.Assembly):
         return constr
 
     def make_alterations(self):
-        board = self.components["board"]
-        print(self)
-        if self.target is not None:
-            for i, j in enumerate(board.mount_verts()):
-                self.components[self.standoff_name(i)].make_cutout(part=self.target)
+        # Safely access board - it may not exist if component creation failed
+        try:
+            board = self.components.get("board")
+            if board is None:
+                return  # Skip alterations if board doesn't exist
+            print(self)
+            if self.target is not None:
+                for i, j in enumerate(board.mount_verts()):
+                    self.components[self.standoff_name(i)].make_cutout(part=self.target)
+        except (KeyError, AttributeError) as e:
+            # Gracefully handle missing board component
+            print(f"[warn] make_alterations skipped: {e}")
+            return
 
     # put the board across
     def mate_transverse(self):

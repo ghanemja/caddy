@@ -6,13 +6,9 @@ from cqparts.params import *
 from .base import FastenerHead, register
 
 # pull FreeCAD module from cadquery (workaround for torus)
-# Note: Modern CadQuery uses OCP backend, not freecad_impl
-# Import FreeCAD directly since it's loaded in optim.py
 try:
-    # Try old CadQuery API (pre-2.0)
     FreeCAD = cadquery.freecad_impl.FreeCAD
 except AttributeError:
-    # Use FreeCAD module loaded globally
     import FreeCAD
 
 

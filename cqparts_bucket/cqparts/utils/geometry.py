@@ -34,9 +34,16 @@ def merge_boundboxes(*bb_list):
     #__import__('ipdb').set_trace()
 
     # Create new object with combined parameters
-    WrappedType = type(bb_list[0].wrapped)  # assuming they're all the same
-    wrapped_bb = WrappedType(*(min_params + max_params))
-    return cadquery.BoundBox(wrapped_bb)
+    # Handle both CadQuery 1.x (.wrapped) and 2.x (direct)
+    try:
+        WrappedType = type(bb_list[0].wrapped)
+        wrapped_bb = WrappedType(*(min_params + max_params))
+        return cadquery.BoundBox(wrapped_bb)
+    except AttributeError:
+        # CadQuery 2.x - create FreeCAD BoundBox directly
+        import FreeCAD
+        wrapped_bb = FreeCAD.BoundBox(*(min_params + max_params))
+        return cadquery.BoundBox(wrapped_bb)
 
 
 class CoordSystem(cadquery.Plane):
@@ -272,8 +279,13 @@ class CoordSystem(cadquery.Plane):
         elif isinstance(other, cadquery.Vector):
             # CoordSystem + cadquery.Vector
             transform = self.local_to_world_transform
+            # Handle both CadQuery 1.x (.wrapped) and 2.x (direct)
+            try:
+                vec_obj = other.wrapped
+            except AttributeError:
+                vec_obj = other
             return type(other)(
-                transform.multiply(other.wrapped)
+                transform.multiply(vec_obj)
             )
 
         elif isinstance(other, cadquery.CQ):

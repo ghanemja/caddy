@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import cadquery as cq
 import cqparts
 from cqparts.params import PositiveFloat
@@ -17,10 +15,11 @@ from electronics import type1 as Electronics
 from pan_tilt import PanTilt
 
 class RobotBase(Lasercut):
-    length = PositiveFloat(280)
-    width = PositiveFloat(170)
-    chamfer = PositiveFloat(55)
+    length = PositiveFloat(250)
+    width = PositiveFloat(240)
     thickness = PositiveFloat(6)
+    chamfer = PositiveFloat(30)
+    _render = render_props(template="wood")
 
     def make(self):
         base = cq.Workplane("XY").rect(self.length, self.width).extrude(self.thickness)
@@ -83,6 +82,7 @@ class Rover(cqparts.Assembly):
     width = PositiveFloat(170)
     chamfer = PositiveFloat(55)
     thickness = PositiveFloat(6)
+
     wheels_per_side = PositiveFloat(4)  # default 4 per side (8 total)
     axle_spacing_mm = PositiveFloat(70)  # spacing along X between axles
     wheelbase_span_mm = PositiveFloat(0)  # if >0, evenly span this distance; overrides axle_spacing_mm
@@ -120,9 +120,7 @@ class Rover(cqparts.Assembly):
     def _axle_offsets(self):
         n = max(1, int(round(float(self.wheels_per_side))))
         if n == 1:
-            return [
-                self.axle_spacing_mm
-            ]  # single axle near the front chamfer
+            return [self.length / 2 - self.chamfer]
 
         span = float(self.wheelbase_span_mm)
         if span > 0:
@@ -148,8 +146,6 @@ class Rover(cqparts.Assembly):
                 self.components["base"].mate_front(),
             ),
         ]
-        # Constrain each axle pair to rails at its offset
-        offsets = self._axle_offsets()
         for i, off in enumerate(self._axle_offsets()):
             c += [
                 Coincident(
@@ -163,4 +159,3 @@ class Rover(cqparts.Assembly):
             ]
         return c
 
-# Register the rover model

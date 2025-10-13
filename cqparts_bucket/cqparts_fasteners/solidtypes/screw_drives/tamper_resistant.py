@@ -1,5 +1,6 @@
 import cadquery
-# from cadquery import BoxSelector  # Not available in CadQuery 2.x, and not used
+# BoxSelector not available in CadQuery 2.x
+# from cadquery import BoxSelector
 from math import pi, cos, sqrt
 
 from cqparts.params import *

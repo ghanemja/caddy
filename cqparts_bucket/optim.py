@@ -1045,15 +1045,20 @@ You will receive:
 1. REFERENCE IMAGE(s) - showing the desired robot rover design
 2. CURRENT CAD SNAPSHOT - orthogonal views of the current CAD model
 3. BASELINE PYTHON SOURCE - the current robot_base.py implementation
-4. USER INTENT - human qualitative assessment and modification requests
+4. USER INTENT/INSTRUCTION - specific modification request from user
 
-Your job: Make MINIMAL parameter changes to match the reference image. DO NOT rewrite logic or framework code.
+Your job: Copy the baseline source and modify ONLY the parameter values that the user requested OR that are needed to match the reference image.
 
 === CRITICAL OUTPUT RULES ===
-⚠️ Output ONLY Python code. NO explanations, NO markdown fences, NO backticks, NO comments about your changes.
-⚠️ Start immediately with import statements.
-⚠️ Output a complete, valid, syntactically correct Python module.
-⚠️ COPY the baseline source and make MINIMAL changes - only modify parameter VALUES.
+⚠️ Output ONLY valid Python code - NO explanations, NO markdown fences (```), NO extra text
+⚠️ Start immediately with #!/usr/bin/env python3
+⚠️ COPY the ENTIRE baseline source (all imports, classes, methods)
+⚠️ ONLY modify parameter VALUES (numbers in PositiveFloat(...)) where needed
+⚠️ If user asks for specific change (e.g., "set wheels to 4"), make ONLY that change
+⚠️ If user just says "match the image", identify what differs and change those parameters
+⚠️ DO NOT modify method implementations (make_components, make_constraints, etc.)
+⚠️ DO NOT add/remove classes or methods
+⚠️ Keep all comments, imports, and structure identical
 
 === CQPARTS FRAMEWORK UNDERSTANDING ===
 
@@ -1072,42 +1077,57 @@ Your job: Make MINIMAL parameter changes to match the reference image. DO NOT re
 5. The `_axle_offsets()` helper method - copy exactly
 6. Import statements - copy exactly
 
-**WHAT YOU SHOULD MODIFY:**
-Only change PositiveFloat/Int parameter VALUES in class definitions:
+**WHAT TO CHANGE:**
+Only parameter VALUES in class definitions:
+- `wheels_per_side = PositiveFloat(2)` → Change the 2
+- `length = PositiveFloat(280)` → Change the 280
+- `wheel_diameter = PositiveFloat(120)` → Change the 120
 
-```python
-class Rover(cqparts.Assembly):
-    length = PositiveFloat(280)        # ← ONLY modify these numbers
-    width = PositiveFloat(170)         # ← Change these values
-    wheels_per_side = PositiveFloat(2) # ← e.g., 2 → 3 for 6 wheels
-    axle_spacing_mm = PositiveFloat(70)# ← Adjust spacing
+**Example - CORRECT search-replace output:**
+```json
+[
+  {
+    "search": "    wheels_per_side = PositiveFloat(6)  # default 6 per side (12 total)",
+    "replace": "    wheels_per_side = PositiveFloat(4)  # default 4 per side (8 total)",
+    "reason": "Reduce wheels from 6 to 4 per side"
+  }
+]
 ```
 
-**Example - CORRECT minimal change:**
-```python
-# BEFORE (baseline):
-wheels_per_side = PositiveFloat(2)  # 2 per side = 4 total
-
-# AFTER (your output):
-wheels_per_side = PositiveFloat(3)  # 3 per side = 6 total
+**Example - WRONG:**
+```json
+[
+  {
+    "search": "wheels_per_side",  // ❌ Not specific enough
+    "replace": "wheels_per_side = PositiveFloat(4)"  // ❌ Must copy EXACT line from baseline
+  },
+  {
+    "search": "wheels_per_side = PositiveFloat(2)",  // ❌ Wrong value! Baseline has 6, not 2
+    "replace": "wheels_per_side = PositiveFloat(4)"
+  }
+]
 ```
 
-**Example - WRONG (DO NOT DO THIS):**
-```python
-# DO NOT rewrite make_components() like this:
-def make_components(self):
-    for i in range(3):  # ← WRONG! Don't rewrite the logic!
-        left_wheel = self.wheel(...)
-```
+=== SEARCH STRING RULES - CRITICAL ===
+⚠️ Copy the EXACT line from the BASELINE SOURCE above (including comments!)
+⚠️ Do NOT use values from examples - use the ACTUAL values you see in baseline
+⚠️ Include exact whitespace (spaces/tabs) at start of line
+⚠️ Include any trailing comments if present
+⚠️ Copy the entire line character-for-character from baseline source
+
+**How to get it right:**
+1. FIND the parameter in baseline source (e.g., search for "wheels_per_side")
+2. COPY that exact line (with spaces, comments, everything)
+3. PASTE into "search"
+4. MODIFY only the number in "replace" (keep structure/comments identical)
 
 === STEP-BY-STEP PROCESS ===
-1. READ the baseline source code carefully
-2. IDENTIFY which parameters control what you see in the image
-3. CALCULATE new parameter values based on visual comparison
-4. COPY the baseline source entirely
-5. CHANGE only the specific parameter values (the numbers)
-6. DO NOT modify any method implementations
-7. VERIFY syntax is correct (balanced parentheses, proper indentation)
+1. LOOK at the REFERENCE image - what does the rover look like?
+2. LOOK at the SNAPSHOT image (if provided) - what does it look like now?
+3. IDENTIFY the differences (more wheels? bigger? longer?)
+4. FIND the parameters in baseline source that control those aspects
+5. OUTPUT JSON array with search-replace pairs for ONLY those parameters
+6. Maximum 10 changes - be selective and focused
 
 === COMMON PARAMETERS TO MODIFY ===
 
@@ -1126,14 +1146,14 @@ def make_components(self):
 - `wheelbase_span_mm` (total span, or leave at 0 for auto)
 
 === VALIDATION CHECKLIST ===
-Before outputting, verify:
-- [ ] All parentheses are balanced
-- [ ] All method signatures match the baseline exactly  
-- [ ] All imports are copied exactly
-- [ ] No undefined attributes (e.g., self.diameter when it should be in ThisWheel class)
-- [ ] make_components() returns a dict
-- [ ] make_constraints() returns a list
-- [ ] No typos in parameter names (e.g., "axle_spacings" vs "axle_spacing_mm")
+Before outputting your JSON array, verify:
+- [ ] Each "search" string has exact indentation from baseline
+- [ ] Each "search" string is unique (won't match multiple lines)
+- [ ] Each "replace" string has same indentation as search
+- [ ] Only parameter VALUES changed (not variable names or structure)
+- [ ] Valid JSON syntax (double quotes, no trailing commas)
+- [ ] Maximum 10 changes (be selective!)
+- [ ] Each change has a brief "reason"
 
 === YOUR INPUTS FOLLOW ===
 """
@@ -1161,7 +1181,8 @@ def _build_codegen_prompt(
         "=" * 80,
         "\n<<<BASELINE_PYTHON_SOURCE>>>\n",
         "# File: robot_base.py\n",
-        "# This is the current implementation you should modify\n\n",
+        "# This is the current implementation - copy exact lines from here\n",
+        "# Look for parameter lines like: wheels_per_side = PositiveFloat(N)\n\n",
         baseline_src if baseline_src else "# (baseline source unavailable)",
         "\n<<<END_BASELINE_PYTHON_SOURCE>>>\n",
         "=" * 80,
@@ -1181,19 +1202,64 @@ def _build_codegen_prompt(
     
     parts += [
         "\n\n=== IMAGES PROVIDED ===",
-        "\n- Image 0: REFERENCE (target design)",
+        "\n- Image 0: REFERENCE (target design showing desired rover)",
     ]
     
     if snapshot_url:
-        parts.append("\n- Image 1: CURRENT CAD SNAPSHOT (orthogonal views)")
+        parts.append("\n- Image 1: CURRENT CAD SNAPSHOT (orthogonal views of current model)")
+        parts.append("\n\nCompare these TWO images to understand what needs to change.")
+    else:
+        parts.append("\n\n(No current snapshot - generate from reference image only)")
     
     parts += [
-        "\n\n=== NOW OUTPUT YOUR MODIFIED robot_base.py ===",
-        "\nRemember: Python code ONLY, no markdown, no explanations.",
-        "\nStart with imports, output complete classes.\n",
+        "\n\n" + "=" * 80,
+        "\n=== NOW OUTPUT THE COMPLETE MODIFIED robot_base.py ===",
+        "\n" + "=" * 80,
+        "\n",
+        "\n🚨 CRITICAL INSTRUCTIONS:",
+        "\n",
+        "\n1. READ the user's instruction carefully - what specific change did they request?",
+        "\n2. COPY the ENTIRE baseline source above (all 180+ lines)",
+        "\n3. Modify ONLY the parameter(s) mentioned in the user instruction",
+        "\n4. If user says 'set wheels_per_side to 4', change ONLY that ONE parameter",
+        "\n5. If user says 'match the image', compare images and change what differs",
+        "\n6. DO NOT change parameters that weren't requested and don't need changing",
+        "\n7. Keep ALL method implementations identical (make_components, make_constraints, etc.)",
+        "\n",
+        "\n⚠️ OUTPUT REQUIREMENTS:",
+        "\n• NO markdown fences (```python or ```) - output raw Python only",
+        "\n• NO explanations like 'Here is the modified code'",
+        "\n• Start with: #!/usr/bin/env python3",
+        "\n• Copy every import, every class, every method from baseline",
+        "\n• Your output should be 150-250 lines (same length as baseline)",
+        "\n• DO NOT use '...' or abbreviate any methods",
+        "\n",
+        "\n✅ Example - User says 'set wheels to 4':",
+        "\n• Find line: wheels_per_side = PositiveFloat(6)  # default 6 per side",
+        "\n• Change to: wheels_per_side = PositiveFloat(4)  # default 4 per side",
+        "\n• Copy everything else EXACTLY as-is",
+        "\n• Result: 180 lines with ONE number changed",
+        "\n",
+        "\n❌ WRONG - Do NOT do:",
+        '\n• Output ```python at start',
+        "\n• Abbreviate methods with '# ... rest of code'",
+        "\n• Return single object from make_components (must return dict)",
+        "\n• Change parameters that user didn't request",
+        "\n• Modify imports or method logic",
+        "\n",
+        "\n⚠️ Your output will be compiled and validated. It must be syntactically perfect.",
+        "\n",
+        "\nSTART YOUR PYTHON CODE NOW (begin with #!/usr/bin/env python3, no fences):",
+        "\n",
     ]
     
     images = [u for u in [ref_url, snapshot_url] if u]
+    
+    # Debug logging
+    print(f"[codegen_prompt] Built prompt with {len(images)} images")
+    print(f"[codegen_prompt] Total prompt length: {len(''.join(parts))} chars")
+    print(f"[codegen_prompt] Baseline source included: {len(baseline_src)} chars")
+    
     return "".join(parts), images
 
 
@@ -1242,140 +1308,84 @@ def codegen():
         
         print(f"[codegen] Final prompt length: {len(final_prompt)} chars")
         print(f"[codegen] Calling VLM with {len(images)} image(s)...")
-        # Ask the VLM for Python code (NOT JSON)
+        # Ask the VLM for full Python code (NOT JSON)
         out = call_vlm(final_prompt, images, expect_json=False)
         raw_txt = out.get("raw", "")
         
         print(f"[codegen] Got {len(raw_txt)} chars from VLM")
         print(f"[codegen] Raw VLM output (first 500 chars):")
         print(raw_txt[:500])
-        print(f"[codegen] Raw VLM output (last 200 chars):")
-        print(raw_txt[-200:])
-
-        # Strip the sentinel if present
-        end_ix = raw_txt.find("# END_OF_MODULE")
-        if end_ix != -1:
-            print(f"[codegen] Found END_OF_MODULE marker at position {end_ix}")
-            raw_txt = raw_txt[:end_ix]
-        else:
-            print(f"[codegen] No END_OF_MODULE marker found")
 
         gen_dir = os.path.join(BASE_DIR, "generated")
         os.makedirs(gen_dir, exist_ok=True)
 
-        # Extract valid Python code
+        # Extract valid Python code from VLM output
         try:
             code_txt = extract_python_module(raw_txt.strip())
+            print(f"[codegen] ✓ Extracted {len(code_txt)} chars of Python code")
         except Exception as e:
             # Save the raw response for debugging
             import time
             reject_path = os.path.join(gen_dir, f"robot_base_vlm.reject_{int(time.time())}.txt")
             with open(reject_path, "w", encoding="utf-8") as rf:
                 rf.write(raw_txt)
-            print(f"[codegen] Failed to parse Python. Saved to {reject_path}")
+            print(f"[codegen] ✗ Failed to extract Python code. Saved to {reject_path}")
             print(f"[codegen] Error: {e}")
-            print(f"[codegen] VLM output preview (first 1000 chars):")
-            print(raw_txt[:1000])
-            print(f"[codegen] VLM output preview (last 500 chars):")
-            print(raw_txt[-500:])
             
-            # Try to extract even with errors and save it
-            attempted_code = None
-            try:
-                # Try to find code blocks even if they don't parse
-                fence_match = re.findall(r"```(?:python)?\s*([\s\S]*?)\s*```", raw_txt, flags=re.I)
-                if fence_match:
-                    attempted_code = fence_match[0].strip()
-                    # Save it anyway for manual fixing
-                    save_path = os.path.join(gen_dir, "robot_base_vlm_WITH_ERRORS.py")
-                    with open(save_path, "w", encoding="utf-8") as f:
-                        f.write(f"# WARNING: This code has syntax errors!\n")
-                        f.write(f"# Error: {e}\n")
-                        f.write(f"# Fix the errors manually and use this file\n\n")
-                        f.write(attempted_code)
-                    print(f"[codegen] ⚠️ Saved code WITH ERRORS to: {save_path}")
-                    print(f"[codegen] You can manually fix the syntax error and use it")
-            except:
-                pass
-            
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": f"VLM output wasn't valid Python: {e}",
-                        "reject_path": reject_path,
-                        "raw_length": len(raw_txt),
-                        "raw_preview_first": raw_txt[:500],
-                        "raw_preview_last": raw_txt[-200:],
-                        "code_with_errors": attempted_code[:500] if attempted_code else None,
-                        "help": f"Check {reject_path} for full VLM output. Code saved to robot_base_vlm_WITH_ERRORS.py - you can manually fix the syntax error."
-                    }
-                ),
-                400,
-            )
+            return jsonify({
+                "ok": False,
+                "error": f"Could not extract valid Python from VLM output: {e}",
+                "reject_path": reject_path,
+                "raw_preview": raw_txt[:1000],
+                "help": f"Check {reject_path} for full VLM output."
+            }), 400
 
-        # Log what we got
-        print(f"[codegen] Extracted code length: {len(code_txt)} chars")
-        print(f"[codegen] First 300 chars: {code_txt[:300]}")
+        # Apply automatic fixes/normalization
+        code_txt = normalize_generated_code(code_txt)
+
+        # Validate code compiles (after normalization)
+        try:
+            compile(code_txt, "robot_base_vlm.py", "exec")
+            print(f"[codegen] ✓ Normalized code compiles successfully")
+        except SyntaxError as e:
+            import time
+            reject_path = os.path.join(gen_dir, f"robot_base_vlm.syntax_error_{int(time.time())}.py")
+            with open(reject_path, "w", encoding="utf-8") as rf:
+                rf.write(f"# SYNTAX ERROR\n# {e}\n\n")
+                rf.write(code_txt)
+            
+            return jsonify({
+                "ok": False,
+                "error": f"Generated code has syntax error: {e}",
+                "reject_path": reject_path
+            }), 400
         
-        # Save with timestamp backup (save BEFORE validation so we can debug)
+        # Save the generated code
         import time
         timestamp = int(time.time())
         backup_path = os.path.join(gen_dir, f"robot_base_vlm_{timestamp}.py")
         mod_path = os.path.join(gen_dir, "robot_base_vlm.py")
         
-        # Save even if validation fails (for debugging)
         with open(mod_path, "w", encoding="utf-8") as f:
             f.write(code_txt)
         with open(backup_path, "w", encoding="utf-8") as f:
             f.write(code_txt)
         
-        print(f"[codegen] Saved to {mod_path} (backup: {backup_path})")
-        
-        # Safety check: ensure it contains essential class definitions
-        # Be lenient - check case-insensitive and look for variations
-        code_lower = code_txt.lower()
-        has_rover = "class rover" in code_lower
-        has_robotbase = "class robotbase" in code_lower
-        has_imports = "import" in code_lower and ("cadquery" in code_lower or "cq" in code_lower)
-        has_defs = "def " in code_lower
-        
-        print(f"[codegen] Validation checks:")
-        print(f"  - Has 'class Rover': {has_rover}")
-        print(f"  - Has 'class RobotBase': {has_robotbase}")
-        print(f"  - Has imports: {has_imports}")
-        print(f"  - Has function defs: {has_defs}")
-        
-        if not (has_rover or has_robotbase):
-            print(f"[codegen] ⚠️ Warning: Generated code missing expected classes!")
-            print(f"[codegen] Code preview (first 500 chars):")
-            print(code_txt[:500])
-            
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": "Generated code missing Rover or RobotBase class definition",
-                        "saved_anyway": True,
-                        "module_path": mod_path,
-                        "backup_path": backup_path,
-                        "code_length": len(code_txt),
-                        "code_preview": code_txt[:500],
-                        "help": "Check the saved file to see what the VLM generated. May need to adjust prompt."
-                    }
-                ),
-                400,
-            )
+        print(f"[codegen] ✓ Saved to {mod_path}")
+        print(f"[codegen] ✓ Backup: {backup_path}")
+        print(f"[codegen] Code: {len(code_txt)} chars, {len(code_txt.splitlines())} lines")
 
         # Try to rebuild the GLB with the new code
         # (This is optional - the generated module might need manual integration)
         try:
-            print("[codegen] Attempting to rebuild GLB with new code...")
-            _rebuild_and_save_glb()
-            print("[codegen] GLB rebuild successful")
+            print("[codegen] Attempting to rebuild GLB with new generated code...")
+            _rebuild_and_save_glb(use_generated=True)  # Use the generated code!
+            print("[codegen] ✓ GLB rebuild successful with generated code")
             glb_updated = True
         except Exception as e:
-            print(f"[codegen] GLB rebuild failed (expected): {e}")
+            print(f"[codegen] GLB rebuild failed: {e}")
+            import traceback
+            traceback.print_exc()
             glb_updated = False
 
         return jsonify({
@@ -1384,8 +1394,9 @@ def codegen():
             "module_path": mod_path,
             "backup_path": backup_path,
             "code_length": len(code_txt),
+            "code_lines": len(code_txt.splitlines()),
             "glb_updated": glb_updated,
-            "message": "Generated robot_base.py - review and integrate manually if needed"
+            "message": "Generated complete robot_base.py with modifications"
         })
         
     except requests.exceptions.Timeout as e:
@@ -1617,14 +1628,21 @@ def call_vlm(
                 print(f"[vlm] Generating response...")
                 
                 # Generate
+                # For code generation, use more tokens and very low temperature for faithful copying
+                max_tokens = 6144 if not expect_json else 1024  # Code needs lots of tokens for 200+ lines
+                temp = 0.01 if not expect_json else 0.1  # Very low temp for precise copying
+                
                 with torch.no_grad():
                     output_ids = _finetuned_model.generate(
                         **inputs,
-                        max_new_tokens=2048 if not expect_json else 1024,
-                        temperature=0.1,
-                        top_p=0.9,
-                        do_sample=True,
+                        max_new_tokens=max_tokens,
+                        temperature=temp,
+                        top_p=0.98,
+                        do_sample=True if temp > 0 else False,
+                        repetition_penalty=1.1,  # Prevent getting stuck in loops
                     )
+                    
+                print(f"[vlm] Generated with max_tokens={max_tokens}, temp={temp}")
                 
                 # Decode response
                 generated_ids = output_ids[0][inputs['input_ids'].shape[1]:]
@@ -1760,6 +1778,142 @@ def call_vlm(
             err = (err or "") + f" ; LLAVA_URL error: {e}"
 
     raise RuntimeError(err or "No VLM endpoint configured")
+
+
+def normalize_generated_code(code: str) -> str:
+    """
+    Normalize/fix common errors in VLM-generated code.
+    
+    Common issues:
+    - Hyphens instead of underscores in attribute names
+    - Missing self. prefix
+    - Undefined 'offsets' variable
+    - Missing class parameters
+    """
+    print("[normalize] Applying automatic fixes to generated code...")
+    
+    original_code = code
+    fixes_applied = []
+    
+    # Fix 1: Replace hyphenated attribute names with underscores
+    # self.wheelbase_span-mm → self.wheelbase_span_mm
+    # self.axle_spacing-mm → self.axle_spacing_mm
+    hyphen_fixes = {
+        r'\.wheelbase_span-mm': '.wheelbase_span_mm',
+        r'\.axle_spacing-mm': '.axle_spacing_mm',
+        r'\.wheel_z_offset-mm': '.wheel_z_offset_mm',
+        r'\.wheel-diameter': '.wheel_diameter',
+        r'\.wheel-width': '.wheel_width',
+    }
+    
+    for pattern, replacement in hyphen_fixes.items():
+        import re
+        if re.search(pattern, code):
+            code = re.sub(pattern, replacement, code)
+            fixes_applied.append(f"Fixed hyphenated attribute: {pattern} → {replacement}")
+    
+    # Fix 2: Undefined 'offsets' variable in make_constraints
+    # for i, off in enumerate(offsets): → for i, off in enumerate(self._axle_offsets()):
+    if re.search(r'for\s+i,\s+off\s+in\s+enumerate\(offsets\)', code):
+        code = re.sub(
+            r'for\s+i,\s+off\s+in\s+enumerate\(offsets\)',
+            'for i, off in enumerate(self._axle_offsets())',
+            code
+        )
+        fixes_applied.append("Fixed undefined 'offsets' → 'self._axle_offsets()'")
+    
+    # Fix 3: Missing class parameters - add them if Rover class exists but missing params
+    rover_match = re.search(r'class Rover\(cqparts\.Assembly\):\s*\n((?:\s+\w+.*\n)*)', code)
+    if rover_match:
+        rover_body = rover_match.group(1)
+        # Check if essential parameters are missing
+        has_length = 'length = ' in rover_body
+        has_width = 'width = ' in rover_body
+        has_chamfer = 'chamfer = ' in rover_body
+        has_thickness = 'thickness = ' in rover_body
+        
+        if not has_length or not has_width:
+            # Need to add missing parameters
+            # Find where to insert (after class declaration, before other params)
+            insert_params = []
+            if not has_length:
+                insert_params.append('    length = PositiveFloat(280)')
+            if not has_width:
+                insert_params.append('    width = PositiveFloat(170)')
+            if not has_chamfer:
+                insert_params.append('    chamfer = PositiveFloat(55)')
+            if not has_thickness:
+                insert_params.append('    thickness = PositiveFloat(6)')
+            
+            if insert_params:
+                # Insert after "class Rover..." line
+                code = re.sub(
+                    r'(class Rover\(cqparts\.Assembly\):\s*\n)',
+                    r'\1' + '\n'.join(insert_params) + '\n',
+                    code
+                )
+                fixes_applied.append(f"Added missing Rover parameters: {', '.join([p.split('=')[0].strip() for p in insert_params])}")
+    
+    # Fix 4: Wrong base length calculation
+    # length=self.wheels_per_side * self.axle_spacing_mm → length=self.length
+    if 'length=self.wheels_per_side' in code:
+        code = code.replace(
+            'length=self.wheels_per_side * self.axle_spacing_mm',
+            'length=self.length'
+        )
+        fixes_applied.append("Fixed RobotBase length calculation")
+    
+    # Fix 5: Return statement in _axle_offsets with syntax error
+    # return [self.axle_spacing-mm] → return [self.chamfer]
+    code = re.sub(
+        r'return \[\s*self\.axle_spacing-mm\s*\]',
+        'return [self.length / 2 - self.chamfer]',
+        code
+    )
+    
+    # Fix 6: max_off calculation error
+    # max_off = self.axle_spacing-mm → max_off = self.length - self.chamfer
+    code = re.sub(
+        r'max_off = self\.axle_spacing-mm',
+        'max_off = self.length - self.chamfer',
+        code
+    )
+    
+    # Fix 7: Electronics/sensors should not have target=base in make_components
+    # self.electronics(target=base) → self.electronics()
+    # self.sensors(target=base) → self.sensors(target=base) [keep for sensors!]
+    if 'self.electronics(target=base)' in code:
+        code = code.replace('self.electronics(target=base)', 'self.electronics()')
+        fixes_applied.append("Removed target=base from electronics() call")
+    
+    # Fix 8: max_off should be length - chamfer, not axle_spacing_mm
+    if 'max_off = self.axle_spacing_mm' in code:
+        code = code.replace(
+            'max_off = self.axle_spacing_mm',
+            'max_off = self.length - self.chamfer'
+        )
+        fixes_applied.append("Fixed max_off calculation in _axle_offsets")
+    
+    # Fix 9: Remove any trailing incomplete register() calls or display calls
+    lines = code.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # Skip incomplete or problematic lines at the end
+        if line.strip().startswith('cq.display.') or \
+           line.strip().startswith('register(') and 'model=' not in line:
+            continue
+        cleaned_lines.append(line)
+    code = '\n'.join(cleaned_lines)
+    
+    # Report fixes
+    if fixes_applied:
+        print(f"[normalize] Applied {len(fixes_applied)} automatic fixes:")
+        for fix in fixes_applied:
+            print(f"[normalize]   - {fix}")
+    else:
+        print("[normalize] No fixes needed - code looks clean")
+    
+    return code
 
 
 def extract_python_module(text: str) -> str:
@@ -1999,6 +2153,12 @@ def _apply_changes_list(changes: List[dict], excerpt: str | None = None):
 @app.get("/")
 def index():
     return render_template("viewer.html")
+
+
+@app.get("/debug")
+def debug_viewer():
+    """Simple viewer for inspecting GLB output."""
+    return render_template("simple_viewer.html")
 
 
 @app.get("/state")
@@ -2743,9 +2903,46 @@ def _baseline_cqparts_source(max_chars: int = 20000) -> str:
     return merged
 
 
-def build_rover_scene_glb_cqparts() -> bytes:
-    print("Generating GLB via cqparts…")
-    rv = Rover(
+def build_rover_scene_glb_cqparts_hybrid(use_generated=False) -> bytes:
+    """
+    Build GLB using hybrid environment approach:
+    - Call build_glb.py in freecad environment (CadQuery 1.x, no .wrapped issues)
+    - Return GLB bytes to main server (cad-optimizer env)
+    """
+    import subprocess
+    
+    script_path = os.path.join(BASE_DIR, "build_glb.py")
+    cmd = f"source ~/.bashrc && conda activate freecad && python {script_path}"
+    
+    if use_generated:
+        cmd += " --generated"
+    
+    print(f"[hybrid] Building GLB in freecad environment...", flush=True)
+    
+    try:
+        result = subprocess.run(
+            ["bash", "-c", cmd],
+            capture_output=True,
+            timeout=120
+        )
+        
+        if result.returncode == 0 and len(result.stdout) > 1000:
+            print(f"[hybrid] ✓ GLB built: {len(result.stdout)} bytes", flush=True)
+            return result.stdout
+        else:
+            print(f"[hybrid] ✗ Build failed (code {result.returncode}):", flush=True)
+            print(f"[hybrid] stderr: {result.stderr.decode()[:1000]}", flush=True)
+            raise RuntimeError(f"Hybrid build failed: {result.stderr.decode()[:500]}")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("GLB build timed out")
+
+def build_rover_scene_glb_cqparts(RoverClass=None) -> bytes:
+    """Build GLB from cqparts, optionally using a custom Rover class."""
+    if RoverClass is None:
+        RoverClass = Rover
+    
+    print(f"Generating GLB via cqparts using {RoverClass.__name__}...")
+    rv = RoverClass(
         stepper=_Stepper, electronics=_Electronics, sensors=_PanTilt, wheel=_ThisWheel
     )
     for name, cls in (
@@ -2758,9 +2955,9 @@ def build_rover_scene_glb_cqparts() -> bytes:
             setattr(rv, name, cls)
     _apply_runtime_params_to_instance(rv)
 
-    saved_pending_attr = hasattr(Rover, "_pending_adds")
-    saved_pending_val = getattr(Rover, "_pending_adds", None)
-    setattr(Rover, "_pending_adds", [])
+    saved_pending_attr = hasattr(RoverClass, "_pending_adds")
+    saved_pending_val = getattr(RoverClass, "_pending_adds", None)
+    setattr(RoverClass, "_pending_adds", [])
 
     build_err = [None]
 
@@ -2778,10 +2975,10 @@ def build_rover_scene_glb_cqparts() -> bytes:
     if t.is_alive() or build_err[0] is not None:
         print("[warn] build timed out or errored:", build_err[0])
     if saved_pending_attr:
-        setattr(Rover, "_pending_adds", saved_pending_val)
+        setattr(RoverClass, "_pending_adds", saved_pending_val)
     else:
         try:
-            delattr(Rover, "_pending_adds")
+            delattr(RoverClass, "_pending_adds")
         except Exception:
             pass
 
@@ -3069,19 +3266,105 @@ def build_rover_scene_glb(_: Optional[Dict[str, Any]] = None) -> bytes:
     raise FileNotFoundError("cqparts disabled, and assets/rover.glb not found")
 
 
-def _rebuild_and_save_glb():
-    setattr(Rover, "_pending_adds", list(PENDING_ADDS))
-    glb = build_rover_scene_glb_cqparts()
+def _reload_rover_from_generated():
+    """
+    Dynamically reload the Rover class from generated/robot_base_vlm.py if it exists.
+    Returns the Rover class (either new or original).
+    """
+    gen_path = os.path.join(BASE_DIR, "generated", "robot_base_vlm.py")
+    
+    if not os.path.exists(gen_path):
+        print("[reload] No generated code found, using original Rover")
+        return Rover
+    
+    try:
+        print(f"[reload] Loading Rover from {gen_path}...")
+        import importlib.util
+        
+        # Load the module from the generated file
+        spec = importlib.util.spec_from_file_location("robot_base_vlm", gen_path)
+        if spec is None or spec.loader is None:
+            print("[reload] ✗ Failed to create module spec")
+            return Rover
+            
+        module = importlib.util.module_from_spec(spec)
+        
+        # Add to sys.modules temporarily so imports work
+        sys.modules["robot_base_vlm"] = module
+        
+        # Execute the module
+        spec.loader.exec_module(module)
+        
+        # Get the Rover class
+        if hasattr(module, 'Rover'):
+            new_rover = module.Rover
+            print(f"[reload] ✓ Loaded Rover from generated code")
+            return new_rover
+        elif hasattr(module, 'RobotBase'):
+            new_rover = module.RobotBase
+            print(f"[reload] ✓ Loaded RobotBase from generated code")
+            return new_rover
+        else:
+            print("[reload] ✗ Generated code has no Rover or RobotBase class")
+            return Rover
+            
+    except Exception as e:
+        print(f"[reload] ✗ Failed to load generated code: {e}")
+        import traceback
+        traceback.print_exc()
+        return Rover
+
+
+def _rebuild_and_save_glb(use_generated=False):
+    """
+    Rebuild the GLB file.
+    If use_generated=True, uses generated/robot_base_vlm.py instead of robot_base.py
+    """
+    # Reload Rover from generated code if requested
+    RoverClass = _reload_rover_from_generated() if use_generated else Rover
+    
+    # Build the GLB with the selected Rover class
+    glb = build_rover_scene_glb_cqparts(RoverClass=RoverClass)
+    
     with open(ROVER_GLB_PATH, "wb") as f:
         f.write(glb)
+    print(f"[rebuild] ✓ Saved GLB to {ROVER_GLB_PATH}")
 
 
 # ----------------- GLB route & static -----------------
 @app.get("/model.glb")
 def model_glb():
     try:
-        glb = build_rover_scene_glb({})
+        # Check if we should use generated code
+        # Can be forced via ?use_generated=1 or auto-detect
+        force_generated = request.args.get('use_generated') == '1'
+        gen_path = os.path.join(BASE_DIR, "generated", "robot_base_vlm.py")
+        use_generated = force_generated or os.path.exists(gen_path)
+        
+        if use_generated and os.path.exists(gen_path):
+            print("[model.glb] Using hybrid approach with freecad environment", flush=True)
+            try:
+                # Use hybrid builder (runs in freecad env)
+                glb = build_rover_scene_glb_cqparts_hybrid(use_generated=True)
+                
+                # Save to disk so file size/timestamp updates
+                with open(ROVER_GLB_PATH, "wb") as f:
+                    f.write(glb)
+                print(f"[model.glb] ✓ Saved generated GLB to {ROVER_GLB_PATH} ({len(glb)} bytes)", flush=True)
+                
+                return send_file(io.BytesIO(glb), mimetype="model/gltf-binary")
+            except Exception as gen_error:
+                print(f"[model.glb] ✗ Generated code failed to build: {gen_error}")
+                import traceback
+                traceback.print_exc()
+                print("[model.glb] Falling back to original robot_base.py")
+                # Fall through to use original
+        
+        print("[model.glb] Using original robot_base.py with hybrid approach")
+        # Use hybrid builder for original code too
+        glb = build_rover_scene_glb_cqparts_hybrid(use_generated=False)
         return send_file(io.BytesIO(glb), mimetype="model/gltf-binary")
+        
     except Exception as e:
         import traceback
 
