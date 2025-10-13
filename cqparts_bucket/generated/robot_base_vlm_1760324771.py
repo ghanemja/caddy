@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+
+import cadquery as cq
+import cqparts
+from cqparts.params import PositiveFloat
+from cqparts.display import render_props
+from cqparts.constraint import Fixed, Coincident, Mate
+from cqparts.utils.geometry import CoordSystem
+from cqparts.search import register
+from partref import PartRef
+from manufacture import Lasercut
+from motor_mount import MountedStepper
+from cqparts_motors.stepper import Stepper
+from wheel import SpokeWheel
+from electronics import type1 as Electronics
+from pan_tilt import PanTilt
+
+class RobotBase(Lasercut):
+    length = PositiveFloat(280)
+    width = PositiveFloat(170)
+    chamfer = PositiveFloat(55)
+    thickness = PositiveFloat(6)
+
+    def make(self):
+        base = cq.Workplane("XY").rect(self.length, self.width).extrude(self.thickness)
+        base = base.edges("|Z and >X").chamfer(self.chamfer)
+        return base
+
+    def mate_back(self, offset=5):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(-self.length / 2 + offset, 0, self.thickness),
+                xDir=(1, 0, 0),
+                normal=(0, 0, 1),
+            ),
+        )
+
+    def mate_front(self, offset=0):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(self.length / 2 - offset, 0, self.thickness),
+                xDir=(1, 0, 0),
+                normal=(0, 0, 1),
+            ),
+        )
+
+    def mate_RL(self, offset=0):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(-self.length / 2 + offset, self.width / 2, 0),
+                xDir=(1, 0, 0),
+                normal=(0, 0, -1),
+            ),
+        )
+
+    def mate_RR(self, offset=0):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(-self.length / 2 + offset, -self.width / 2, 0),
+                xDir=(-1, 0, 0),
+                normal=(0, 0, -1),
+            ),
+        )
+
+class ThisWheel(SpokeWheel):
+    diameter = PositiveFloat(90)
+    thickness = PositiveFloat(15)
+    outset = PositiveFloat(10)
+
+class ThisStepper(Stepper):
+    width = PositiveFloat(30)
+    height = PositiveFloat(30)
+    length = PositiveFloat(30)
+    hole_spacing = PositiveFloat(15)
+
+class Rover(cqparts.Assembly):
+    length = PositiveFloat(280)
+    width = PositiveFloat(170)
+    chamfer = PositiveFloat(55)
+    thickness = PositiveFloat(6)
+
+    wheels_per_side = PositiveFloat(0)
+    axle_spacing_mm = PositiveFloat(70)
+    wheelbase_span_mm = PositiveFloat(0)
+
+    wheel = PartRef(ThisWheel)
+    stepper = PartRef(ThisStepper)
+    electronics = PartRef(Electronics)
+    sensors = PartRef(PanTilt)
+
+    def make_components(self):
+        base = RobotBase(length=self.length, width=self.width, chamfer=self.chamfer, thickness=self.thickness)
+
+        comps = {
+            "base": base,
+            "electronics": self.electronics(),
+            "sensors": self.sensors(target=base),
+        }
+
+        offsets = self._axle_offsets()
+        for i, off in enumerate(self._axle_offsets()):
+            comps[f"Ldrive_{i}"] = MountedStepper(
+                stepper=self.stepper, driven=self.wheel, target=base
+            )
+            comps[f"Rdrive_{i}"] = MountedStepper(
+                stepper=self.stepper, driven=self.wheel, target=base
+            )
+
+        return comps
+
+    def _axle_offsets(self):
+        n = max(0, int(round(float(self.wheels_per_side))))
+        if n == 0:
+            return []
+        if n == 1:
+            return [self.length / 2 - self.chamfer]
+
+        span = float(self.wheelbase_span_mm)
+        if span > 0:
+            step = span / (n - 1) if n > 1 else 0
+            offs = [self.chamfer + i * step for i in range(n)]
+        else:
+            step = float(self.axle_spacing_mm)
+            offs = [self.chamfer + i * step for i in range(n)]
+
+        max_off = self.length - self.chamfer
+        offs = [min(max(o, self.chamfer), max_off) for o in offs]
+        return offs
+
+    def make_constraints(self):
+        c = [
+            Fixed(self.components["base"].mate_origin, CoordSystem(origin=(0, 0, 60))),
+            Coincident(
+                self.components["electronics"].mate_origin,
+                self.components["base"].mate_back(),
+            ),
+            Coincident(
+                self.components["sensors"].mate_front(),
+                self.components["base"].mate_front(),
+            ),
+        ]
+        for i, off in enumerate(self._axle_offsets()):
+            c += [
+                Coincident(
+                    self.components[f"Ldrive_{i}"].mate_corner(flip=1),
+                    self.components["base"].mate_RL(offset=off),
+                ),
+                Coincident(
+                    self.components[f"Rdrive_{i}"].mate_corner(flip=-1),
+                    self.components["base"].mate_RR(offset=off),
+                ),
+            ]
+        return c
+
+
+# === BuiltWheel ===
+@register(export="wheel")
+class BuiltWheel(_Wheel):
+    hub = PartRef(Hub)
+    center_disc = PartRef(CenterDisc)
+    rim = PartRef(Rim)
+    count = Int(5)
+
+    thickness = PositiveFloat(10)
+
+    def make(self):
+        hub = self.hub(thickness=self.thickness, outset=self.outset)
+        center_disc = self.center_disc(
+            thickness=self.thickness / 5, diameter=self.diameter, count=self.count
+        )
+        rim = self.rim(thickness=self.thickness, diameter=self.diameter)
+        w = hub.local_obj
+        w = w.union(center_disc.local_obj)
+        w = w.union(rim.local_obj)
+        return w
+
+    def mate_wheel(self, flip=-1):
+        return Mate(self, CoordSystem(origin=(0, 0, 0), xDir=(1, 0, 0), normal=(0, 0, flip)))
+
+# === SpokeWheel ===
+@register(export="wheel")
+class SpokeWheel(BuiltWheel):
+    center_disc = PartRef(Spokes)
+
+# === SimpleWheel ===
+@register(export="wheel")
+class SimpleWheel(_Wheel):
+    _render = render_props(color=(90, 90, 90))
+
+    def make(self):
+        sw = cq.Workplane("XY").circle(self.diameter / 2).extrude(self.thickness)
+        sw = sw.faces("|Z").chamfer(self.thickness / 6)
+        return sw
+
+    def mate_wheel(self, flip=-1):
+        return Mate(self, CoordSystem(origin=(0, 0, 0), xDir=(1, 0, 0), normal=(0, 0, flip)))

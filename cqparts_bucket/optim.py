@@ -1083,6 +1083,29 @@ Only parameter VALUES in class definitions:
 - `length = PositiveFloat(280)` → Change the 280
 - `wheel_diameter = PositiveFloat(120)` → Change the 120
 
+**⚠️ TRANSLATING USER REQUESTS TO PARAMETER CHANGES:**
+
+READ THE USER INSTRUCTION CAREFULLY and map it to specific parameter changes:
+
+"remove all wheels" / "no wheels" → wheels_per_side = PositiveFloat(0)
+"3 wheels per side" / "6 wheels total" → wheels_per_side = PositiveFloat(3)
+"increase spacing" / "more space between wheels" → axle_spacing_mm = PositiveFloat(LARGER NUMBER, e.g., 70→90)
+"wheels closer" / "less space" → axle_spacing_mm = PositiveFloat(SMALLER NUMBER, e.g., 70→50)
+"bigger wheels" / "100mm diameter" → diameter = PositiveFloat(100) in ThisWheel class
+"thicker wheels" / "wider wheels" → thickness = PositiveFloat(20) in ThisWheel class
+"longer base" → length = PositiveFloat(LARGER, e.g., 280→350)
+"wider base" → width = PositiveFloat(LARGER, e.g., 170→220)
+
+**ARITHMETIC CHANGES (requires calculation):**
+⚠️ When user says "X mm smaller/larger", you MUST do the math:
+
+"diameter 15mm smaller" → Look at baseline diameter (90), calculate 90-15=75, set diameter = PositiveFloat(75)
+"diameter 20mm larger" → Look at baseline diameter (90), calculate 90+20=110, set diameter = PositiveFloat(110)
+"spacing 10mm more" → Look at baseline axle_spacing_mm (70), calculate 70+10=80, set axle_spacing_mm = PositiveFloat(80)
+"spacing 20mm less" → Look at baseline axle_spacing_mm (70), calculate 70-20=50, set axle_spacing_mm = PositiveFloat(50)
+
+IMPORTANT: Use the BASELINE value (from robot_base.py above) for calculations, NOT the current CAD state!
+
 **Example - CORRECT search-replace output:**
 ```json
 [
@@ -1218,13 +1241,24 @@ def _build_codegen_prompt(
         "\n",
         "\n🚨 CRITICAL INSTRUCTIONS:",
         "\n",
-        "\n1. READ the user's instruction carefully - what specific change did they request?",
+        "\n1. READ the user's instruction carefully - translate it to parameter changes!",
+        "\n   • 'remove all wheels' → wheels_per_side = PositiveFloat(0)",
+        "\n   • '3 wheels per side' → wheels_per_side = PositiveFloat(3)",
+        "\n   • 'more space between wheels' → axle_spacing_mm = PositiveFloat(90) [increase from 70]",
+        "\n   • 'bigger wheels' → diameter = PositiveFloat(100) [increase from 90]",
+        "\n",
         "\n2. COPY the ENTIRE baseline source above (all 180+ lines)",
-        "\n3. Modify ONLY the parameter(s) mentioned in the user instruction",
-        "\n4. If user says 'set wheels_per_side to 4', change ONLY that ONE parameter",
-        "\n5. If user says 'match the image', compare images and change what differs",
-        "\n6. DO NOT change parameters that weren't requested and don't need changing",
-        "\n7. Keep ALL method implementations identical (make_components, make_constraints, etc.)",
+        "\n",
+        "\n3. Modify ONLY the specific parameter VALUE that matches the user request",
+        "\n   • Find the line with that parameter",
+        "\n   • Change ONLY the number inside PositiveFloat(...)",
+        "\n   • Keep everything else identical",
+        "\n",
+        "\n4. DO NOT just copy the baseline unchanged - YOU MUST MAKE THE CHANGE!",
+        "\n   • If user says 'remove all wheels', wheels_per_side MUST be 0, not 4",
+        "\n   • If user says 'increase spacing', axle_spacing_mm MUST be larger, not the same",
+        "\n",
+        "\n5. Keep ALL method implementations identical (make_components, make_constraints, etc.)",
         "\n",
         "\n⚠️ OUTPUT REQUIREMENTS:",
         "\n• NO markdown fences (```python or ```) - output raw Python only",
@@ -1234,11 +1268,24 @@ def _build_codegen_prompt(
         "\n• Your output should be 150-250 lines (same length as baseline)",
         "\n• DO NOT use '...' or abbreviate any methods",
         "\n",
-        "\n✅ Example - User says 'set wheels to 4':",
-        "\n• Find line: wheels_per_side = PositiveFloat(6)  # default 6 per side",
-        "\n• Change to: wheels_per_side = PositiveFloat(4)  # default 4 per side",
-        "\n• Copy everything else EXACTLY as-is",
-        "\n• Result: 180 lines with ONE number changed",
+        "\n✅ Example 1 - User says 'remove all wheels':",
+        "\n• Translate: 'remove all wheels' means wheels_per_side = 0",
+        "\n• Find line: wheels_per_side = PositiveFloat(4)  # default 4 per side",
+        "\n• Change to: wheels_per_side = PositiveFloat(0)  # no wheels",
+        "\n• Copy everything else EXACTLY",
+        "\n• Result: 180 lines with ONE number changed from 4 to 0",
+        "\n",
+        "\n✅ Example 2 - User says 'increase spacing between wheels':",
+        "\n• Translate: 'increase spacing' means axle_spacing_mm should be larger",
+        "\n• Find line: axle_spacing_mm = PositiveFloat(70)",
+        "\n• Change to: axle_spacing_mm = PositiveFloat(90)  # increased by ~30%",
+        "\n• Copy everything else EXACTLY",
+        "\n",
+        "\n✅ Example 3 - User says 'make diameter 15mm smaller':",
+        "\n• Step 1: Find baseline diameter in ThisWheel class: diameter = PositiveFloat(90)",
+        "\n• Step 2: Calculate: 90 - 15 = 75",
+        "\n• Step 3: Change to: diameter = PositiveFloat(75)  # 15mm smaller than 90mm",
+        "\n• Copy everything else EXACTLY",
         "\n",
         "\n❌ WRONG - Do NOT do:",
         '\n• Output ```python at start',
@@ -1789,11 +1836,104 @@ def normalize_generated_code(code: str) -> str:
     - Missing self. prefix
     - Undefined 'offsets' variable
     - Missing class parameters
+    - Missing imports (VLM truncated the file)
     """
     print("[normalize] Applying automatic fixes to generated code...")
     
     original_code = code
     fixes_applied = []
+    
+    # Fix 0: Check if imports are missing and add them
+    required_imports = [
+        "import cadquery as cq",
+        "import cqparts",
+        "from cqparts.params import PositiveFloat",
+        "from cqparts.display import render_props",
+        "from cqparts.constraint import Fixed, Coincident, Mate",
+        "from cqparts.utils.geometry import CoordSystem",
+        "from cqparts.search import register",
+        "from partref import PartRef",
+        "from manufacture import Lasercut",
+        "from motor_mount import MountedStepper",
+        "from cqparts_motors.stepper import Stepper",
+        "from wheel import SpokeWheel",
+        "from electronics import type1 as Electronics",
+        "from pan_tilt import PanTilt",
+    ]
+    
+    # Check if file is missing shebang and imports
+    if not code.strip().startswith("#!/usr/bin/env python3"):
+        # VLM truncated the file! Add back the header
+        missing_imports = []
+        for imp in required_imports:
+            if imp not in code:
+                missing_imports.append(imp)
+        
+        if missing_imports:
+            header = "#!/usr/bin/env python3\n\n" + "\n".join(required_imports) + "\n\n"
+            code = header + code
+            fixes_applied.append(f"Added missing imports ({len(missing_imports)} imports restored)")
+            print(f"[normalize] ✗ VLM truncated file - restored {len(missing_imports)} missing imports")
+    
+    # Fix 0b: Check if RobotBase class is missing (VLM sometimes skips it)
+    if "class RobotBase" not in code:
+        robot_base_class = '''class RobotBase(Lasercut):
+    length = PositiveFloat(280)
+    width = PositiveFloat(170)
+    chamfer = PositiveFloat(55)
+    thickness = PositiveFloat(6)
+
+    def make(self):
+        base = cq.Workplane("XY").rect(self.length, self.width).extrude(self.thickness)
+        base = base.edges("|Z and >X").chamfer(self.chamfer)
+        return base
+
+    def mate_back(self, offset=5):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(-self.length / 2 + offset, 0, self.thickness),
+                xDir=(1, 0, 0),
+                normal=(0, 0, 1),
+            ),
+        )
+
+    def mate_front(self, offset=0):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(self.length / 2 - offset, 0, self.thickness),
+                xDir=(1, 0, 0),
+                normal=(0, 0, 1),
+            ),
+        )
+
+    def mate_RL(self, offset=0):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(-self.length / 2 + offset, self.width / 2, 0),
+                xDir=(1, 0, 0),
+                normal=(0, 0, -1),
+            ),
+        )
+
+    def mate_RR(self, offset=0):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(-self.length / 2 + offset, -self.width / 2, 0),
+                xDir=(-1, 0, 0),
+                normal=(0, 0, -1),
+            ),
+        )
+
+'''
+        # Insert RobotBase before the first ThisWheel or ThisStepper class
+        if "class ThisWheel" in code:
+            code = code.replace("class ThisWheel", robot_base_class + "class ThisWheel")
+            fixes_applied.append("Added missing RobotBase class")
+            print(f"[normalize] ✗ VLM skipped RobotBase - restored it")
     
     # Fix 1: Replace hyphenated attribute names with underscores
     # self.wheelbase_span-mm → self.wheelbase_span_mm
@@ -1893,6 +2033,25 @@ def normalize_generated_code(code: str) -> str:
             'max_off = self.length - self.chamfer'
         )
         fixes_applied.append("Fixed max_off calculation in _axle_offsets")
+    
+    # Fix 8b: Fix _axle_offsets to allow 0 wheels
+    # The baseline has: n = max(1, int(...)) which forces minimum 1 wheel
+    # Change to: n = max(0, int(...)) to allow 0 wheels
+    if 'n = max(1, int(round(float(self.wheels_per_side))))' in code:
+        code = code.replace(
+            'n = max(1, int(round(float(self.wheels_per_side))))',
+            'n = max(0, int(round(float(self.wheels_per_side))))'
+        )
+        fixes_applied.append("Fixed _axle_offsets to allow 0 wheels (changed max(1,...) to max(0,...))")
+    
+    # Fix 8c: Add check for 0 wheels at the start of _axle_offsets
+    if 'def _axle_offsets(self):' in code and 'if n == 0:' not in code:
+        # Insert "if n == 0: return []" after n = max(0, ...)
+        code = code.replace(
+            'n = max(0, int(round(float(self.wheels_per_side))))',
+            'n = max(0, int(round(float(self.wheels_per_side))))\n        if n == 0:\n            return []'
+        )
+        fixes_applied.append("Added early return for 0 wheels in _axle_offsets")
     
     # Fix 9: Remove any trailing incomplete register() calls or display calls
     lines = code.split('\n')
