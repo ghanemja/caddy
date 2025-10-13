@@ -1,0 +1,669 @@
+#!/usr/bin/env python3
+
+import cadquery as cq
+import cqparts
+from cqparts.params import PositiveFloat
+from cqparts.display import render_props
+from cqparts.constraint import Fixed, Coincident, Mate
+from cqparts.utils.geometry import CoordSystem
+from cqparts.search import register
+
+from partref import PartRef
+from manufacture import Lasercut
+from motor_mount import MountedStepper
+from cqparts_motors.stepper import Stepper
+from wheel import SpokeWheel
+from electronics import type1 as Electronics
+from pan_tilt import PanTilt
+
+class RobotBase(Lasercut):
+    length = PositiveFloat(250)
+    width = PositiveFloat(240)
+    thickness = PositiveFloat(6)
+    chamfer = PositiveFloat(30)
+    _render = render_props(template="wood")
+
+    def make(self):
+        base = cq.Workplane("XY").rect(self.length, self.width).extrude(self.thickness)
+        base = base.edges("|Z and >X").chamfer(self.chamfer)
+        return base
+
+    def mate_back(self, offset=5):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(-self.length / 2 + offset, 0, self.thickness),
+                xDir=(1, 0, 0),
+                normal=(0, 0, 1),
+            ),
+        )
+
+    def mate_front(self, offset=0):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(self.length / 2 - offset, 0, self.thickness),
+                xDir=(1, 0, 0),
+                normal=(0, 0, 1),
+            ),
+        )
+
+    def mate_RL(self, offset=0):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(-self.length / 2 + offset, self.width / 2, 0),
+                xDir=(1, 0, 0),
+                normal=(0, 0, -1),
+            ),
+        )
+
+    def mate_RR(self, offset=0):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(-self.length / 2 + offset, -self.width / 2, 0),
+                xDir=(-1, 0, 0),
+                normal=(0, 0, -1),
+            ),
+        )
+
+class ThisWheel(SpokeWheel):
+    diameter = PositiveFloat(90)
+    thickness = PositiveFloat(15)
+    outset = PositiveFloat(10)
+
+class ThisStepper(Stepper):
+    width = PositiveFloat(30)
+    height = PositiveFloat(30)
+    length = PositiveFloat(30)
+    hole_spacing = PositiveFloat(15)
+
+class Rover(cqparts.Assembly):
+    length = PositiveFloat(280)
+    width = PositiveFloat(170)
+    chamfer = PositiveFloat(55)
+    thickness = PositiveFloat(6)
+
+    wheels_per_side = PositiveFloat(3)  # default 3 per side (6 total)
+    axle_spacing_mm = PositiveFloat(70)  # spacing along X between axles
+    wheelbase_span_mm = PositiveFloat(0)  # if >0, evenly span this distance; overrides axle_spacing_mm
+
+    wheel = PartRef(ThisWheel)
+    stepper = PartRef(ThisStepper)
+    electronics = PartRef(Electronics)
+    sensors = PartRef(PanTilt)
+
+    def make_components(self):
+        base = RobotBase(
+            length=self.length,
+            width=self.width,
+            chamfer=self.chamfer,
+            thickness=self.thickness,
+        )
+
+        comps = {
+            "base": base,
+            "electronics": self.electronics(),
+            "sensors": self.sensors(target=base),
+        }
+
+        offsets = self._axle_offsets()
+        for i, off in enumerate(offsets):
+            comps[f"Ldrive_{i}"] = MountedStepper(
+                stepper=self.stepper, driven=self.wheel, target=base
+            )
+            comps[f"Rdrive_{i}"] = MountedStepper(
+                stepper=self.stepper, driven=self.wheel, target=base
+            )
+
+        return comps
+
+    def _axle_offsets(self):
+        n = max(1, int(round(float(self.wheels_per_side))))
+        if n == 1:
+            return [self.length / 2 - self.chamfer]
+
+        span = float(self.wheelbase_span-mm)
+        if span > 0:
+            step = span / (n - 1) if n > 1 else 0
+            offs = [self.chamfer + i * step for i in range(n)]
+        else:
+            step = float(self.axle_spacing-mm)
+            offs = [self.chamfer + i * step for i in range(n)]
+
+        max_off = self.length - self.chamfer
+        offs = [min(max(o, self.chamfer), max_off) for o in offs]
+        return offs
+
+    def make_constraints(self):
+        c = [
+            Fixed(self.components["base"].mate_origin, CoordSystem(origin=(0, 0, 60))),
+            Coincident(
+                self.components["electronics"].mate_origin,
+                self.components["base"].mate_back(),
+            ),
+            Coincident(
+                self.components["sensors"].mate_front(),
+                self.components["base"].mate_front(),
+            ),
+        ]
+        for i, off in enumerate(self._axle_offsets()):
+            c += [
+                Coincident(
+                    self.components[f"Ldrive_{i}"].mate_corner(flip=1),
+                    self.components["base"].mate_RL(offset=off),
+                ),
+                Coincident(
+                    self.components[f"Rdrive_{i}"].mate_corner(flip=-1),
+                    self.components["base"].mate_RR(offset=off),
+                ),
+            ]
+        return c
+
+# === BuiltWheel ===
+@register(export="wheel")
+class BuiltWheel(_Wheel):
+    hub = PartRef(Hub)
+    center_disc = PartRef(CenterDisc)
+    rim = PartRef(Rim)
+    count = Int(5)
+
+    thickness = PositiveFloat(10)
+
+    def make(self):
+        hub = self.hub(thickness=self.thickness, outset=self.outset)
+        center_disc = self.center_disc(
+            thickness=self.thickness / 5, diameter=self.diameter, count=self.count
+        )
+        rim = self.rim(thickness=self.thickness, diameter=self.diameter)
+        w = hub.local_obj
+        w = w.union(center_disc.local_obj)
+        w = w.union(rim.local_obj)
+        return w
+
+    def mate_wheel(self, flip=-1):
+        return Mate(
+            self, CoordSystem(origin=(0, 0, 0), xDir=(1, 0, 0), normal=(0, 0, flip))
+        )
+
+# === SpokeWheel ===
+@register(export="wheel")
+class SpokeWheel(BuiltWheel):
+    center_disc = PartRef(Spokes)
+
+# === SimpleWheel ===
+@register(export="wheel")
+class SimpleWheel(_Wheel):
+    _render = render_props(color=(90, 90, 90))
+
+    def make(self):
+        sw = cq.Workplane("XY").circle(self.diameter / 2).extrude(self.thickness)
+        sw = sw.faces("|Z").chamfer(self.thickness / 6)
+        return sw
+
+    def mate_wheel(self, flip=-1):
+        return Mate(
+            self, CoordSystem(origin=(0, 0, 0), xDir=(1, 0, 0), normal=(0, 0, flip))
+        )
+
+# === PanTilt ===
+@register(export="pan_tilt")
+class PanTilt(cqparts.Assembly):
+    pan_axis = Vector((1, 0, 0))
+    tilt_axis = Vector((0, 1, 0))
+
+    def make(self):
+        pan = cq.Workplane("XY").circle(100).extrude(10)
+        tilt = cq.Workplane("YZ").circle(100).extrude(10)
+        return pan.rotate(tilt_axis, 90)
+
+    def mate_pivot(self, pivot):
+        return Mate(
+            self, CoordSystem(pivot=pivot, xDir=self.pan_axis, yDir=self.tilt_axis)
+        )
+
+# === Hub ===
+@register(export="hub")
+class Hub(cqparts.Part):
+    _render = render_props(color=(100, 100, 100))
+
+    def make(self):
+        h = cq.Workplane("XY").circle(100).extrude(10)
+        h = h.faces(">Z").chamfer(10)
+        return h
+
+# === CenterDisc ===
+@register(export="center_disc")
+class CenterDisc(cqparts.Part):
+    _render = render_props(color=(110, 110, 110))
+
+    def make(self):
+        cd = cq.Workplane("XY").circle(100).extrude(10)
+        cd = cd.faces(">Z").chamfer(10)
+        return cd
+
+# === Rim ===
+@register(export="rim")
+class Rim(cqparts.Part):
+    _render = render_props(color=(120, 120, 120))
+
+    def make(self):
+        r = cq.Workplane("XY").circle(100).extrude(10)
+        r = r.faces(">Z").chamfer(10)
+        return r
+
+# === MotorMount ===
+@register(export="motor_mount")
+class MotorMount(cqparts.Part):
+    _render = render_props(color=(130, 130, 130))
+
+    def make(self):
+        mm = cq.Workplane("XY").circle(100).extrude(10)
+        mm = mm.faces(">Z").chamfer(10)
+        return mm
+
+# === Stepper ===
+@register(export="stepper")
+class Stepper(cqparts.Part):
+    _render = render_props(color=(140, 140, 140))
+
+    def make(self):
+        s = cq.Workplane("XY").circle(100).extrude(10)
+        s = s.faces(">Z").chamfer(10)
+        return s
+
+# === Electronics ===
+@register(export="electronics")
+class Electronics(cqparts.Part):
+    _render = render_props(color=(150, 150, 150))
+
+    def make(self):
+        e = cq.Workplane("XY").circle(100).extrude(10)
+        e = e.faces(">Z").chamfer(10)
+        return e
+
+# === SensorFork ===
+@register(export="sensor_fork")
+class SensorFork(cqparts.Part):
+    _render = render_props(color=(160, 160, 160))
+
+    def make(self):
+        sf = cq.Workplane("XY").circle(100).extrude(10)
+        sf = sf.faces(">Z").chamfer(10)
+        return sf
+
+# === Wheel ===
+@register(export="wheel")
+class Wheel(cqparts.Part):
+    _render = render_props(color=(170, 170, 170))
+
+    def make(self):
+        w = cq.Workplane("XY").circle(100).extrude(10)
+        w = w.faces(">Z").chamfer(10)
+        return w
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(180, 180, 180))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(190, 190, 190))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(200, 200, 200))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(210, 210, 210))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(220, 220, 220))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(230, 230, 230))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(240, 240, 240))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(250, 250, 250))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(260, 260, 260))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(270, 270, 270))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(280, 280, 280))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(290, 290, 290))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(300, 300, 300))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(310, 310, 310))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(320, 320, 320))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(330, 330, 330))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(340, 340, 340))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(350, 350, 350))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(360, 360, 360))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(370, 370, 370))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(380, 380, 380))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(390, 390, 390))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(400, 400, 400))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(410, 410, 410))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(420, 420, 420))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(430, 430, 430))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(440, 440, 440))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(450, 450, 450))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(460, 460, 460))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(470, 470, 470))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(480, 480, 480))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(490, 490, 490))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(500, 500, 500))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(510, 510, 510))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(520, 520, 520))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(530, 530, 530))
+
+    def make(self):
+        ptc = cq.Workplane("XY").circle(100).extrude(10)
+        ptc = ptc.faces(">Z").chamfer(10)
+        return ptc
+
+# === PanTiltBotCap ===
+@register(export="pan_tilt_bot_cap")
+class PanTiltBotCap(cqparts.Part):
+    _render = render_props(color=(540, 540, 5

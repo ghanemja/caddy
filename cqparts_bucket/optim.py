@@ -1905,6 +1905,36 @@ def normalize_generated_code(code: str) -> str:
         cleaned_lines.append(line)
     code = '\n'.join(cleaned_lines)
     
+    # Fix 10: Detect and truncate VLM hallucinations (repetitive class definitions)
+    # If we see the same class name defined multiple times with incrementing values,
+    # truncate at the first repetition
+    lines = code.split('\n')
+    class_names_seen = {}
+    truncate_at = None
+    
+    for i, line in enumerate(lines):
+        # Check for class definitions
+        class_match = re.match(r'^class\s+(\w+)', line)
+        if class_match:
+            class_name = class_match.group(1)
+            if class_name in class_names_seen:
+                # We've seen this class before - this is likely a repetition/hallucination
+                # Truncate here
+                truncate_at = class_names_seen[class_name]
+                print(f"[normalize] ✗ Detected VLM hallucination: class '{class_name}' repeated at line {i}")
+                print(f"[normalize] Truncating at line {truncate_at} (first occurrence)")
+                fixes_applied.append(f"Truncated hallucination: repeated class '{class_name}'")
+                break
+            else:
+                class_names_seen[class_name] = i
+    
+    if truncate_at is not None:
+        code = '\n'.join(lines[:truncate_at])
+        # Ensure we end cleanly - add a comment if the last line is incomplete
+        if code and not code.endswith('\n'):
+            code += '\n'
+        code += '\n# === End of generated code ===\n'
+    
     # Report fixes
     if fixes_applied:
         print(f"[normalize] Applied {len(fixes_applied)} automatic fixes:")

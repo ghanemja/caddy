@@ -17,11 +17,10 @@ from electronics import type1 as Electronics
 from pan_tilt import PanTilt
 
 class RobotBase(Lasercut):
-    length = PositiveFloat(250)
-    width = PositiveFloat(240)
+    length = PositiveFloat(280)
+    width = PositiveFloat(170)
+    chamfer = PositiveFloat(55)
     thickness = PositiveFloat(6)
-    chamfer = PositiveFloat(30)
-    _render = render_props(template="wood")
 
     def make(self):
         base = cq.Workplane("XY").rect(self.length, self.width).extrude(self.thickness)
@@ -69,8 +68,8 @@ class RobotBase(Lasercut):
         )
 
 class ThisWheel(SpokeWheel):
-    diameter = PositiveFloat(90)
-    thickness = PositiveFloat(15)
+    diameter = PositiveFloat(150)
+    thickness = PositiveFloat(20)
     outset = PositiveFloat(10)
 
 class ThisStepper(Stepper):
@@ -85,9 +84,9 @@ class Rover(cqparts.Assembly):
     chamfer = PositiveFloat(55)
     thickness = PositiveFloat(6)
 
-    wheels_per_side = PositiveFloat(4)  # default 4 per side (8 total)
-    axle_spacing_mm = PositiveFloat(70)  # spacing along X between axles
-    wheelbase_span_mm = PositiveFloat(0)  # if >0, evenly span this distance; overrides axle_spacing_mm
+    wheels_per_side = PositiveFloat(4)
+    axle_spacing_mm = PositiveFloat(70)
+    wheelbase_span_mm = PositiveFloat(0)
 
     wheel = PartRef(ThisWheel)
     stepper = PartRef(ThisStepper)
@@ -161,4 +160,12 @@ class Rover(cqparts.Assembly):
             ]
         return c
 
-# Register the rover assembly
+
+def main():
+    doc = cq.Document("WELCOME TO THE ROBOT DESIGNER!")
+    doc.addAssembly(RobotBase())
+    doc.export("myrobot.stl")
+    doc.show()
+
+if __name__ == "__main__":
+    main()
