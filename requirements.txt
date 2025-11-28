@@ -1,0 +1,37 @@
+# Core CAD dependencies
+cadquery>=2.4.0
+numpy
+scipy
+
+# 3D/Geometry libraries
+trimesh
+
+# Web framework
+flask
+requests
+
+# Machine Learning / VLM dependencies
+torch>=2.0.0
+transformers>=4.45.0
+peft>=0.17.0
+accelerate>=0.34.0
+
+# Image processing
+pillow
+
+# cqparts dependencies
+six
+Jinja2
+tinydb
+
+# Project-specific utilities
+rectpack
+anytree
+
+# Additional utilities
+safetensors
+sentencepiece
+
+# Optional: For quantization (uncomment if needed)
+# bitsandbytes
+
