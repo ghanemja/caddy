@@ -187,19 +187,3 @@ If the fine-tuned model fails to load:
 1. Check model path: `echo $FINETUNED_MODEL_PATH`
 2. Verify model files exist at the path
 3. Fall back to Ollama: `USE_FINETUNED_MODEL=0 python optim.py`
-
-### GPU Not Detected
-
-The application will automatically use CPU if GPU is not available. For GPU support:
-
-1. Install CUDA-compatible PyTorch
-2. Verify GPU: `python -c "import torch; print(torch.cuda.is_available())"`
-
-## License
-
-This project uses components from cqparts, which is Apache 2.0 licensed.
-
-## Author
-
-Originally created by Simon Kirkby. Extended with VLM integration and web interface.
-

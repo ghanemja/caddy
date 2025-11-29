@@ -1,20 +1,23 @@
 <div class="section" id="recsSection">
   <header>
-    <h3>Recommendations</h3>
+    <h3>💡 Get Suggestions</h3>
     <button class="toggle" data-target="recsSection">Collapse</button>
   </header>
   <div class="section-body">
-    <div class="row" style="justify-content: space-between">
-      <div id="recsStatus" class="pill" style="opacity: 0.8">No recommendations yet</div>
+    <div style="font-size: 11px; color: #64748b; margin-bottom: 12px; padding: 8px; background: #fef3c7; border-radius: 6px; border-left: 3px solid #f59e0b">
+      <strong>What this does:</strong> Get suggestions for changes (not actual code). Use "Generate Code" above to make real changes.
+    </div>
+    <div class="row" style="justify-content: space-between; margin-bottom: 8px">
+      <div id="recsStatus" class="pill" style="opacity: 0.8">No suggestions yet</div>
       <div>
-        <button id="recsApplyAll">Apply All</button>
-        <button id="recsClear">Clear</button>
+        <button id="recsApplyAll" style="padding: 4px 8px; font-size: 11px">Apply All</button>
+        <button id="recsClear" style="padding: 4px 8px; font-size: 11px">Clear</button>
       </div>
     </div>
     <ul id="recsList" style="list-style: disc; padding-left: 22px; margin: 6px 0 0 14px"></ul>
-    <div id="recsEmpty" style="font-size: 12px; color: #64748b; margin-top: 6px">
-      Run “Suggest from image” to generate ideas.
+    <div id="recsEmpty" style="font-size: 12px; color: #64748b; margin-top: 6px; padding: 8px; background: #f8fafc; border-radius: 4px">
+      Click "Suggest from Image" below to get ideas for improvements.
     </div>
-      <button id="suggestFromImage" style="margin-top: 6px; width: 100%; text-align: center" class="btn">Suggest from image</button>
+    <button id="suggestFromImage" style="margin-top: 12px; width: 100%; text-align: center; padding: 8px; background: #f59e0b; color: white; border: none; border-radius: 8px; cursor: pointer" class="btn">💡 Suggest from Image</button>
   </div>
 </div>

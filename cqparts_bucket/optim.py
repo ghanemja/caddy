@@ -96,9 +96,13 @@ mimetypes.add_type("application/javascript", ".js")
 
 # ----------------- VLM config -----------------
 USE_FINETUNED_MODEL = os.environ.get("USE_FINETUNED_MODEL", "1") == "1"  # Use fine-tuned by default
+# Default to runs/onevision_lora_small relative to project root (parent of cqparts_bucket)
+# BASE_DIR will be defined later, so we compute it here
+_vlm_base_dir = os.path.dirname(__file__)
+_default_model_path = os.path.join(os.path.dirname(_vlm_base_dir), "runs", "onevision_lora_small")
 FINETUNED_MODEL_PATH = os.environ.get(
     "FINETUNED_MODEL_PATH", 
-    "/home/ec2-user/Documents/cad-optimizer/runs/onevision_lora_small"
+    _default_model_path
 )
 OLLAMA_URL = os.environ.get(
     "OLLAMA_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
@@ -2833,7 +2837,11 @@ def vlm():
             }
         )
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        import traceback
+        error_msg = f"VLM endpoint error: {str(e)}"
+        print(f"[vlm endpoint] {error_msg}", flush=True)
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 # ----------------- Introspection -----------------
@@ -3161,8 +3169,15 @@ def build_rover_scene_glb_cqparts(RoverClass=None) -> bytes:
     t = threading.Thread(target=_run_build, daemon=True)
     t.start()
     t.join(40.0)
-    if t.is_alive() or build_err[0] is not None:
-        print("[warn] build timed out or errored:", build_err[0])
+    if t.is_alive():
+        print("[error] build timed out after 40 seconds", flush=True)
+        raise RuntimeError("Rover build timed out after 40 seconds")
+    if build_err[0] is not None:
+        print(f"[error] build failed: {build_err[0]}", flush=True)
+        import traceback
+        if hasattr(build_err[0], '__traceback__'):
+            traceback.print_exception(type(build_err[0]), build_err[0], build_err[0].__traceback__)
+        raise RuntimeError(f"Rover build failed: {build_err[0]}") from build_err[0]
     if saved_pending_attr:
         setattr(RoverClass, "_pending_adds", saved_pending_val)
     else:
@@ -3530,39 +3545,111 @@ def model_glb():
         gen_path = os.path.join(BASE_DIR, "generated", "robot_base_vlm.py")
         use_generated = force_generated or os.path.exists(gen_path)
         
-        if use_generated and os.path.exists(gen_path):
-            print("[model.glb] Using hybrid approach with freecad environment", flush=True)
+        # Try hybrid approach first (if build_glb.py exists)
+        script_path = os.path.join(BASE_DIR, "build_glb.py")
+        use_hybrid = os.path.exists(script_path)
+        
+        if use_hybrid:
+            if use_generated and os.path.exists(gen_path):
+                print("[model.glb] Using hybrid approach with freecad environment (generated)", flush=True)
+                try:
+                    # Use hybrid builder (runs in freecad env)
+                    glb = build_rover_scene_glb_cqparts_hybrid(use_generated=True)
+                    
+                    # Save to disk so file size/timestamp updates
+                    with open(ROVER_GLB_PATH, "wb") as f:
+                        f.write(glb)
+                    print(f"[model.glb] ✓ Saved generated GLB to {ROVER_GLB_PATH} ({len(glb)} bytes)", flush=True)
+                    
+                    return send_file(io.BytesIO(glb), mimetype="model/gltf-binary")
+                except Exception as gen_error:
+                    print(f"[model.glb] ✗ Hybrid approach failed: {gen_error}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+                    print("[model.glb] Falling back to direct build method", flush=True)
+                    # Fall through to direct build
+            
+            print("[model.glb] Using hybrid approach with freecad environment (original)", flush=True)
             try:
-                # Use hybrid builder (runs in freecad env)
-                glb = build_rover_scene_glb_cqparts_hybrid(use_generated=True)
+                # Use hybrid builder for original code too
+                glb = build_rover_scene_glb_cqparts_hybrid(use_generated=False)
                 
                 # Save to disk so file size/timestamp updates
                 with open(ROVER_GLB_PATH, "wb") as f:
                     f.write(glb)
-                print(f"[model.glb] ✓ Saved generated GLB to {ROVER_GLB_PATH} ({len(glb)} bytes)", flush=True)
+                print(f"[model.glb] ✓ Saved GLB to {ROVER_GLB_PATH} ({len(glb)} bytes)", flush=True)
                 
                 return send_file(io.BytesIO(glb), mimetype="model/gltf-binary")
-            except Exception as gen_error:
-                print(f"[model.glb] ✗ Generated code failed to build: {gen_error}")
+            except Exception as hybrid_error:
+                print(f"[model.glb] ✗ Hybrid approach failed: {hybrid_error}", flush=True)
                 import traceback
                 traceback.print_exc()
-                print("[model.glb] Falling back to original robot_base.py")
-                # Fall through to use original
+                print("[model.glb] Falling back to direct build method", flush=True)
+                # Fall through to direct build
         
-        print("[model.glb] Using original robot_base.py with hybrid approach")
-        # Use hybrid builder for original code too
-        glb = build_rover_scene_glb_cqparts_hybrid(use_generated=False)
+        # Fallback to direct build method (no hybrid/subprocess)
+        print("[model.glb] Using direct build method", flush=True)
+        if use_generated and os.path.exists(gen_path):
+            print("[model.glb] Loading generated robot_base_vlm.py", flush=True)
+            RoverClass = _reload_rover_from_generated()
+        else:
+            RoverClass = Rover
+        
+        glb = build_rover_scene_glb_cqparts(RoverClass=RoverClass)
+        
+        # Save to disk so file size/timestamp updates
+        with open(ROVER_GLB_PATH, "wb") as f:
+            f.write(glb)
+        print(f"[model.glb] ✓ Saved GLB to {ROVER_GLB_PATH} ({len(glb)} bytes)", flush=True)
+        
         return send_file(io.BytesIO(glb), mimetype="model/gltf-binary")
         
     except Exception as e:
         import traceback
-
+        error_msg = f"model.glb build failed:\n{traceback.format_exc()}"
+        print(f"[model.glb] FATAL ERROR: {error_msg}", flush=True)
+        traceback.print_exc()
+        
+        # Fallback: try to serve cached GLB if it exists
+        if os.path.exists(ROVER_GLB_PATH):
+            try:
+                print(f"[model.glb] Attempting to serve cached GLB from {ROVER_GLB_PATH}", flush=True)
+                with open(ROVER_GLB_PATH, "rb") as f:
+                    cached_glb = f.read()
+                if len(cached_glb) > 1000:  # Ensure it's a valid GLB
+                    print(f"[model.glb] Serving cached GLB ({len(cached_glb)} bytes)", flush=True)
+                    return send_file(io.BytesIO(cached_glb), mimetype="model/gltf-binary")
+            except Exception as cache_error:
+                print(f"[model.glb] Failed to serve cached GLB: {cache_error}", flush=True)
+        
         return Response(
-            "model.glb build failed:\n" + traceback.format_exc(),
+            error_msg,
             status=500,
             mimetype="text/plain",
         )
 
+
+@app.route("/demo/rover.png")
+@app.route("/demo/mars_rover.jpg")
+def demo_mars_rover():
+    """Serve the demo Mars rover image."""
+    # Try rover.png first (user's file), then fall back to mars_rover.jpg
+    demo_paths = [
+        os.path.join(ASSETS_DIR, "demo", "rover.png"),
+        os.path.join(ASSETS_DIR, "demo", "mars_rover.jpg"),
+    ]
+    
+    for demo_path in demo_paths:
+        if os.path.exists(demo_path):
+            mimetype = "image/png" if demo_path.endswith(".png") else "image/jpeg"
+            return send_file(demo_path, mimetype=mimetype)
+    
+    # Return a placeholder message if demo image doesn't exist
+    return Response(
+        "Demo image not found. Please save the Mars rover image to assets/demo/rover.png or assets/demo/mars_rover.jpg",
+        status=404,
+        mimetype="text/plain"
+    )
 
 @app.route("/static/<path:filename>")
 def custom_static(filename):
@@ -3637,7 +3724,9 @@ if __name__ == "__main__":
     # Don't load model on startup - load it lazily on first use
     # This makes the server start in seconds instead of minutes
     if USE_FINETUNED_MODEL:
-        print("[startup] Fine-tuned VLM model will load on first request (lazy loading)")
+        print(f"[startup] Fine-tuned VLM model will load on first request (lazy loading)")
+        print(f"[startup] Model path: {FINETUNED_MODEL_PATH}")
+        print(f"[startup] Model path exists: {os.path.exists(FINETUNED_MODEL_PATH)}")
         print("[startup] This makes server start fast - first VLM request will take 2-3 min")
     else:
         print("[startup] Using Ollama/LLAVA for VLM")

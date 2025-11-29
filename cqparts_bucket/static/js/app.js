@@ -57,6 +57,9 @@ function parseJSONish(str) {
 
 
 const suggestBtn = document.getElementById("suggestFromImage");
+if (!suggestBtn) {
+    console.warn("[app.js] suggestFromImage button not found");
+}
 
 async function snapshotCanvasToBlob() {
     const canvas = document.getElementById("canvas");
@@ -64,10 +67,19 @@ async function snapshotCanvasToBlob() {
         canvas.toBlob((b) => res(b), "image/png", 0.9)
     );
 }
-suggestBtn.onclick = async () => {
+if (suggestBtn) {
+    suggestBtn.onclick = async () => {
     try {
         const data = new FormData();
-        if (imgFile.files?.[0]) data.append('reference', imgFile.files[0]); else { vlmNotice.textContent = 'Select a reference image first.'; vlmNotice.style.color = '#b45309'; return; }
+        if (imgFile && imgFile.files?.[0]) {
+            data.append('reference', imgFile.files[0]);
+        } else {
+            if (vlmNotice) {
+                vlmNotice.textContent = 'Select a reference image first.';
+                vlmNotice.style.color = '#b45309';
+            }
+            return;
+        }
             // UI: mark loading
         const loading = startLoadingLine('Generating recommendations');
         suggestBtn.disabled = true;
@@ -131,9 +143,10 @@ suggestBtn.onclick = async () => {
     } catch (e) {
         logLine(String(e), 'err');
     } finally {
-        suggestBtn.disabled = false;
+        if (suggestBtn) suggestBtn.disabled = false;
     }
-};
+    };
+}
 
 function sceneBasis() {
     const up = new THREE.Vector3(0, 1, 0);
@@ -311,9 +324,9 @@ const chips = document.getElementById("chips");
 const imgFile = document.getElementById("imgFile"),
     imgPreview = document.getElementById("imgPreview"),
     clearImg = document.getElementById("clearImg");
-const insertSelected = document.getElementById("insertSelected"),
-    sendVLM = document.getElementById("sendVLM"),
-    vlmNotice = document.getElementById("vlmNotice");
+const insertSelected = document.getElementById("insertSelected");
+const sendVLM = document.getElementById("sendVLM");
+const vlmNotice = document.getElementById("vlmNotice");
 
 // Recommendations panel
 const recsSection = document.getElementById('recsSection');
@@ -323,8 +336,25 @@ const recsStatus = document.getElementById('recsStatus');
 const recsApplyAll = document.getElementById('recsApplyAll');
 const recsClear = document.getElementById('recsClear');
 
-document.getElementById('toggleLeftPanel').onchange = (e) => setPanel('left', e.target.checked);
-document.getElementById('toggleRightPanel').onchange = (e) => setPanel('right', e.target.checked);
+// Panel toggle buttons (changed from checkboxes to buttons)
+const toggleLeftBtn = document.getElementById('toggleLeftPanel');
+const toggleRightBtn = document.getElementById('toggleRightPanel');
+
+if (toggleLeftBtn) {
+  toggleLeftBtn.onclick = () => {
+    const leftCollapsed = localStorage.getItem('panel:left') === '1';
+    setPanel('left', leftCollapsed);
+    toggleLeftBtn.textContent = leftCollapsed ? '◀ Left' : '▶ Left';
+  };
+}
+
+if (toggleRightBtn) {
+  toggleRightBtn.onclick = () => {
+    const rightCollapsed = localStorage.getItem('panel:right') === '1';
+    setPanel('right', rightCollapsed);
+    toggleRightBtn.textContent = rightCollapsed ? 'Right ▶' : '◀ Right';
+  };
+}
 
 
 
@@ -572,6 +602,10 @@ function colorizeByClass() {
 }
 
 function syncSidebar() {
+    if (!compList) {
+        console.warn("[syncSidebar] compList not found");
+        return;
+    }
     compList.innerHTML = "";
     classMap.forEach((entry, key) => {
         const li = document.createElement("li");
@@ -592,15 +626,17 @@ function syncSidebar() {
         compList.appendChild(li);
     });
     // chips live near VLM prompt now
-    chips.innerHTML = "";
-    classMap.forEach((_, key) => {
-        const c = document.createElement("span");
-        c.className = "chip";
-        c.textContent = key;
-        c.title = "Insert into prompt";
-        c.onclick = () => insertText(` ${key} `);
-        chips.appendChild(c);
-    });
+    if (chips) {
+        chips.innerHTML = "";
+        classMap.forEach((_, key) => {
+            const c = document.createElement("span");
+            c.className = "chip";
+            c.textContent = key;
+            c.title = "Insert into prompt";
+            c.onclick = () => insertText(` ${key} `);
+            chips.appendChild(c);
+        });
+    }
     adjustColumns();
 }
 
@@ -723,34 +759,50 @@ function clearScene() {
 }
 
 async function loadModel() {
-    clearScene();
-    const loader = new GLTFLoader();
-    const url = "/model.glb?ts=" + Date.now();
-    logLine("Loading model…");
-    await new Promise((res, rej) =>
-        loader.load(
-            url,
-            (g) => {
-                group = g.scene;
-                group.rotation.x = -Math.PI / 2; // Z-up → Y-up
-                setDefaultIfMissing(group);
-                pivot.add(group);
-                buildClassRegistry(group);
-                colorizeByClass();
-                placeLabels();
-                syncSidebar();
-                fit();
-                saveBaselineCam();
-                res();
-                logLine("Model loaded.");
-            },
-            undefined,
-            (err) => {
-                logLine("GLTF load error: " + String(err), "err");
-                rej(err);
-            }
-        )
-    );
+    try {
+        clearScene();
+        const loader = new GLTFLoader();
+        const url = "/model.glb?ts=" + Date.now();
+        console.log("[loadModel] Starting to load model from:", url);
+        logLine("Loading model…");
+        
+        await new Promise((res, rej) => {
+            loader.load(
+                url,
+                (g) => {
+                    console.log("[loadModel] Model loaded successfully:", g);
+                    group = g.scene;
+                    group.rotation.x = -Math.PI / 2; // Z-up → Y-up
+                    setDefaultIfMissing(group);
+                    pivot.add(group);
+                    buildClassRegistry(group);
+                    colorizeByClass();
+                    placeLabels();
+                    syncSidebar();
+                    fit();
+                    saveBaselineCam();
+                    console.log("[loadModel] Model added to scene, group:", group);
+                    logLine("Model loaded.");
+                    res();
+                },
+                (progress) => {
+                    if (progress.lengthComputable) {
+                        const percent = (progress.loaded / progress.total) * 100;
+                        console.log("[loadModel] Loading progress:", percent.toFixed(1) + "%");
+                    }
+                },
+                (err) => {
+                    console.error("[loadModel] GLTF load error:", err);
+                    logLine("GLTF load error: " + String(err), "err");
+                    rej(err);
+                }
+            );
+        });
+    } catch (e) {
+        console.error("[loadModel] Exception:", e);
+        logLine("Failed to load model: " + String(e), "err");
+        throw e;
+    }
 }
 
 // Camera controls wiring
@@ -785,7 +837,114 @@ panSpd.oninput = () => {
 };
 
 const refEl = document.getElementById('ref');
-const snapEl = document.getElementById('snap');
+const loadDemoBtn = document.getElementById('loadDemo');
+const demoPreview = document.getElementById('demoPreview');
+const demoImg = document.getElementById('demoImg');
+
+// Load demo image function
+async function loadDemoImage() {
+  if (!refEl) {
+    console.error('Reference input element not found');
+    return;
+  }
+  
+  try {
+    // Try rover.png first, then fall back to mars_rover.jpg
+    let response = await fetch('/demo/rover.png');
+    if (!response.ok) {
+      response = await fetch('/demo/mars_rover.jpg');
+    }
+    if (!response.ok) {
+      const errorMsg = 'Demo image not found. Please save the Mars rover image to: assets/demo/mars_rover.jpg';
+      console.warn(errorMsg);
+      if (loadDemoBtn) {
+        loadDemoBtn.textContent = 'Image Not Found';
+        loadDemoBtn.style.background = '#ef4444';
+        setTimeout(() => {
+          if (loadDemoBtn) {
+            loadDemoBtn.textContent = 'Load Demo';
+            loadDemoBtn.style.background = '#3b82f6';
+          }
+        }, 2000);
+      }
+      logLine('⚠ ' + errorMsg, 'warn');
+      return;
+    }
+    
+    const blob = await response.blob();
+    const file = new File([blob], 'mars_rover.jpg', { type: 'image/jpeg' });
+    
+    // Create a DataTransfer object to set the file input
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+    refEl.files = dataTransfer.files;
+    
+    // Show preview
+    if (demoImg && demoPreview) {
+      const url = URL.createObjectURL(blob);
+      demoImg.src = url;
+      demoPreview.style.display = 'block';
+    }
+    
+    // Trigger change event so any listeners are notified
+    refEl.dispatchEvent(new Event('change', { bubbles: true }));
+    
+    // Set a default prompt for adding wheels if prompt is empty
+    const promptEl = document.getElementById('prompt');
+    if (promptEl && !promptEl.value.trim()) {
+      promptEl.value = 'Add wheels to match the reference image. The rover should have 6 wheels total (3 per side) like shown in the image.';
+    }
+    
+    if (loadDemoBtn) {
+      loadDemoBtn.textContent = '✓ Loaded';
+      loadDemoBtn.style.background = '#10b981';
+      setTimeout(() => {
+        if (loadDemoBtn) {
+          loadDemoBtn.textContent = 'Load Demo';
+          loadDemoBtn.style.background = '#3b82f6';
+        }
+      }, 2000);
+    }
+    
+    logLine('✓ Demo image loaded: Mars Rover');
+  } catch (e) {
+    console.error('Failed to load demo image:', e);
+    const errorMsg = 'Failed to load demo image: ' + e.message;
+    logLine('⚠ ' + errorMsg, 'err');
+    if (loadDemoBtn) {
+      loadDemoBtn.textContent = 'Error';
+      loadDemoBtn.style.background = '#ef4444';
+      setTimeout(() => {
+        if (loadDemoBtn) {
+          loadDemoBtn.textContent = 'Load Demo';
+          loadDemoBtn.style.background = '#3b82f6';
+        }
+      }, 2000);
+    }
+  }
+}
+
+// Load demo on button click
+if (loadDemoBtn) {
+  loadDemoBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    loadDemoImage();
+  });
+} else {
+  console.warn('Load demo button not found');
+}
+
+// Auto-load demo on page load (only if elements exist)
+if (refEl && loadDemoBtn) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      setTimeout(loadDemoImage, 1000); // Small delay to ensure everything is initialized
+    });
+  } else {
+    setTimeout(loadDemoImage, 1000);
+  }
+}
 const btn = document.getElementById('btn-codegen');
 const codegenStatus = document.getElementById('codegenStatus');
 const codegenOutput = document.getElementById('codegenOutput');
@@ -818,7 +977,19 @@ btn.addEventListener('click', async () => {
   
   const fd = new FormData();
   fd.append('reference', refEl.files[0]);
-  if (snapEl.files[0]) fd.append('snapshot', snapEl.files[0]);
+  
+  // Automatically capture current model snapshot from canvas
+  try {
+    const snapBlob = await snapshotCanvasToBlob();
+    if (snapBlob) {
+      fd.append('snapshot', new File([snapBlob], 'snapshot.png', { type: 'image/png' }));
+      logLine('✓ Captured current model snapshot automatically');
+    }
+  } catch (e) {
+    console.warn('Failed to capture snapshot:', e);
+    logLine('⚠ Could not capture snapshot, continuing without it', 'warn');
+  }
+  
   fd.append('prompt', promptEl.value || '');
 
   btn.disabled = true;
@@ -948,27 +1119,33 @@ function insertText(txt) {
     promptEl.focus();
     promptEl.selectionStart = promptEl.selectionEnd = start + txt.length;
 }
-insertSelected.onclick = () => {
-    if (selectedClass) insertText(` ${selectedClass} `);
-};
+if (insertSelected) {
+    insertSelected.onclick = () => {
+        if (selectedClass) insertText(` ${selectedClass} `);
+    };
+}
 
 // Image upload preview (area is visible by default)
-imgFile.onchange = () => {
-    const f = imgFile.files?.[0];
-    if (!f) {
-        imgPreview.removeAttribute("src");
-        return;
-    }
-    const r = new FileReader();
-    r.onload = (e) => {
-        imgPreview.src = e.target.result;
+if (imgFile) {
+    imgFile.onchange = () => {
+        const f = imgFile.files?.[0];
+        if (!f) {
+            if (imgPreview) imgPreview.removeAttribute("src");
+            return;
+        }
+        const r = new FileReader();
+        r.onload = (e) => {
+            if (imgPreview) imgPreview.src = e.target.result;
+        };
+        r.readAsDataURL(f);
     };
-    r.readAsDataURL(f);
-};
-clearImg.onclick = () => {
-    imgFile.value = "";
-    imgPreview.removeAttribute("src");
-};
+}
+if (clearImg) {
+    clearImg.onclick = () => {
+        if (imgFile) imgFile.value = "";
+        if (imgPreview) imgPreview.removeAttribute("src");
+    };
+}
 
 // VLM → apply → reload → highlight
 async function applyVLMJson(jsonObj) {
@@ -1049,38 +1226,46 @@ async function applyVLMJson(jsonObj) {
 }
 
 // Send to VLM
-sendVLM.onclick = async () => {
-    const data = new FormData();
-    data.append("prompt", promptEl.value || "");
-    data.append("selected_class", selectedClass || "");
-    data.append("classes", JSON.stringify([...classMap.keys()]));
-    if (imgFile.files?.[0]) data.append("image", imgFile.files[0]);
-    try {
-        const r = await fetch("/vlm", { method: "POST", body: data });
-        if (!r.ok) {
-            throw new Error(`HTTP ${r.status}`);
+if (sendVLM) {
+    sendVLM.onclick = async () => {
+        const data = new FormData();
+        data.append("prompt", promptEl.value || "");
+        data.append("selected_class", selectedClass || "");
+        data.append("classes", JSON.stringify([...classMap.keys()]));
+        if (imgFile && imgFile.files?.[0]) data.append("image", imgFile.files[0]);
+        try {
+            const r = await fetch("/vlm", { method: "POST", body: data });
+            if (!r.ok) {
+                throw new Error(`HTTP ${r.status}`);
+            }
+            const js = await r.json().catch(() => ({}));
+            const raw = js?.response?.raw || "";
+            const parsed = js?.response?.json || null;
+            if (parsed && typeof parsed === "object") {
+                if (vlmNotice) {
+                    vlmNotice.textContent = "VLM: parsed JSON OK → applying…";
+                    vlmNotice.style.color = "#16a34a";
+                }
+                await applyVLMJson(parsed);
+            } else {
+                if (vlmNotice) {
+                    vlmNotice.textContent =
+                        "VLM responded, but no strict JSON found (check console).";
+                    vlmNotice.style.color = "#f59e0b";
+                }
+                console.log("[VLM raw]", raw);
+                logLine("VLM returned non-JSON. No changes applied.", "warn");
+            }
+        } catch (e) {
+            if (vlmNotice) {
+                vlmNotice.textContent =
+                    "VLM endpoint not configured. Request prepared locally.";
+                vlmNotice.style.color = "#b45309";
+            }
+            logLine(String(e), "err");
         }
-        const js = await r.json().catch(() => ({}));
-        const raw = js?.response?.raw || "";
-        const parsed = js?.response?.json || null;
-        if (parsed && typeof parsed === "object") {
-            vlmNotice.textContent = "VLM: parsed JSON OK → applying…";
-            vlmNotice.style.color = "#16a34a";
-            await applyVLMJson(parsed);
-        } else {
-            vlmNotice.textContent =
-                "VLM responded, but no strict JSON found (check console).";
-            vlmNotice.style.color = "#f59e0b";
-            console.log("[VLM raw]", raw);
-            logLine("VLM returned non-JSON. No changes applied.", "warn");
-        }
-    } catch (e) {
-        vlmNotice.textContent =
-            "VLM endpoint not configured. Request prepared locally.";
-        vlmNotice.style.color = "#b45309";
-        logLine(String(e), "err");
-    }
-};
+    };
+}
 
 // Hover highlight by class (lightweight)
 function updateHover() {
@@ -1141,11 +1326,15 @@ function setPanel(which, show) {
     window.dispatchEvent(new Event('resize'));
 }
 
-function syncPanelCheckboxes() {
+function syncPanelButtons() {
     const leftCollapsed = localStorage.getItem('panel:left') === '1';
     const rightCollapsed = localStorage.getItem('panel:right') === '1';
-    document.getElementById('toggleLeftPanel').checked = !leftCollapsed;
-    document.getElementById('toggleRightPanel').checked = !rightCollapsed;
+    if (toggleLeftBtn) {
+      toggleLeftBtn.textContent = leftCollapsed ? '▶ Left' : '◀ Left';
+    }
+    if (toggleRightBtn) {
+      toggleRightBtn.textContent = rightCollapsed ? '◀ Right' : 'Right ▶';
+    }
 }
 
 function applyPanelState() {
@@ -1180,12 +1369,16 @@ function summarizeChange(ch) {
 }
 
 function clearRecommendations() {
-    recsList.innerHTML = '';
-    recsEmpty.style.display = 'block';
-    recsStatus.textContent = 'No recommendations yet';
+    if (recsList) recsList.innerHTML = '';
+    if (recsEmpty) recsEmpty.style.display = 'block';
+    if (recsStatus) recsStatus.textContent = 'No recommendations yet';
 }
 
 function renderRecommendations(changes) {
+    if (!recsList) {
+        console.warn("[renderRecommendations] recsList not found");
+        return;
+    }
     recsList.innerHTML = '';
     const list = Array.isArray(changes) ? changes : (changes ? [changes] : []);
     if (!list.length) { clearRecommendations(); return; }
@@ -1261,10 +1454,14 @@ recsApplyAll.onclick = async () => {
 
 
 // wire buttons (place after DOM is ready / in start())
-document.getElementById("toggleLeftPanel").onclick = () =>
-    togglePanel("left");
-document.getElementById("toggleRightPanel").onclick = () =>
-    togglePanel("right");
+const toggleLeftBtn2 = document.getElementById("toggleLeftPanel");
+const toggleRightBtn2 = document.getElementById("toggleRightPanel");
+if (toggleLeftBtn2) {
+    toggleLeftBtn2.onclick = () => togglePanel("left");
+}
+if (toggleRightBtn2) {
+    toggleRightBtn2.onclick = () => togglePanel("right");
+}
 
 document.getElementById("reload").onclick = () =>
     loadModel().catch((e) => logLine(String(e), "err"));
@@ -1278,15 +1475,118 @@ function animate() {
     requestAnimationFrame(animate);
 }
 
+// Initial resize to ensure canvas is properly sized
+window.addEventListener('load', () => {
+    setTimeout(() => {
+        resize();
+        if (renderer.domElement.clientWidth === 0 || renderer.domElement.clientHeight === 0) {
+            console.warn('Canvas has zero size, forcing resize');
+            setTimeout(resize, 100);
+        }
+    }, 100);
+});
+
+// Resizable panels
+function setupResizablePanels() {
+  const leftResizeHandle = document.getElementById('leftResizeHandle');
+  const rightResizeHandle = document.getElementById('rightResizeHandle');
+  
+  function resizeLeft(e) {
+    e.preventDefault();
+    const newWidth = e.clientX;
+    if (newWidth >= 200 && newWidth <= window.innerWidth * 0.5) {
+      document.documentElement.style.setProperty('--sidebar', `${newWidth}px`);
+      localStorage.setItem('sidebar-width', newWidth);
+      window.dispatchEvent(new Event('resize'));
+    }
+  }
+  
+  function resizeRight(e) {
+    e.preventDefault();
+    const newWidth = window.innerWidth - e.clientX;
+    if (newWidth >= 200 && newWidth <= window.innerWidth * 0.5) {
+      document.documentElement.style.setProperty('--right', `${newWidth}px`);
+      localStorage.setItem('right-width', newWidth);
+      window.dispatchEvent(new Event('resize'));
+    }
+  }
+  
+  if (leftResizeHandle) {
+    leftResizeHandle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      document.addEventListener('mousemove', resizeLeft);
+      document.addEventListener('mouseup', () => {
+        document.removeEventListener('mousemove', resizeLeft);
+      }, { once: true });
+    });
+  }
+  
+  if (rightResizeHandle) {
+    rightResizeHandle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      document.addEventListener('mousemove', resizeRight);
+      document.addEventListener('mouseup', () => {
+        document.removeEventListener('mousemove', resizeRight);
+      }, { once: true });
+    });
+  }
+  
+  // Restore saved widths
+  const savedLeftWidth = localStorage.getItem('sidebar-width');
+  const savedRightWidth = localStorage.getItem('right-width');
+  if (savedLeftWidth) {
+    document.documentElement.style.setProperty('--sidebar', `${savedLeftWidth}px`);
+  }
+  if (savedRightWidth) {
+    document.documentElement.style.setProperty('--right', `${savedRightWidth}px`);
+  }
+}
+
 (async function start() {
     // call once during init (e.g., at top of start())
     applyPanelState();
-    syncPanelCheckboxes();
+    syncPanelButtons();
     setupToggles();
+    setupResizablePanels();
+    
+    // Ensure canvas is sized before starting animation
+    resize();
     animate();
+    
     await getMode();
     adjustColumns();
-    await loadModel().catch((e) => logLine(String(e), "err"));
+    
+    // Small delay to ensure canvas is ready
+    await new Promise(resolve => setTimeout(resolve, 200));
+    
+    // Verify canvas exists and is visible
+    const canvas = document.getElementById("canvas");
+    if (!canvas) {
+        console.error("[start] Canvas element not found!");
+        logLine("ERROR: Canvas element not found!", "err");
+        return;
+    }
+    
+    const wrap = document.getElementById("wrap");
+    if (!wrap) {
+        console.error("[start] Wrap element not found!");
+        logLine("ERROR: Wrap element not found!", "err");
+        return;
+    }
+    
+    console.log("[start] Canvas size:", canvas.clientWidth, "x", canvas.clientHeight);
+    console.log("[start] Wrap size:", wrap.clientWidth, "x", wrap.clientHeight);
+    
+    if (canvas.clientWidth === 0 || canvas.clientHeight === 0) {
+        console.warn("[start] Canvas has zero size, waiting and retrying...");
+        await new Promise(resolve => setTimeout(resolve, 500));
+        resize();
+    }
+    
+    await loadModel().catch((e) => {
+        logLine(String(e), "err");
+        console.error("Failed to load model:", e);
+    });
     fov.value = String(Math.round(camera.fov));
     fovVal.textContent = `${Math.round(camera.fov)}°`;
     near.value = String(camera.near);

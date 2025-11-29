@@ -4,12 +4,14 @@
   {% include "partials/_head.html" %}
   <body>
     {% include "partials/_bar.html" %}
-    {% include "partials/_left_camera.html" %}
+    <div id="left">
+      <div class="resize-handle" id="leftResizeHandle"></div>
+      {% include "partials/_left_camera.html" %}
+    </div>
     {% include "partials/_canvas.html" %}
     <div id="right">
+      <div class="resize-handle" id="rightResizeHandle"></div>
       {% include "partials/_right_components.html" %}
-      {% include "partials/_right_vlm.html" %}
-      {% include "partials/_right_upload.html" %}
       {% include "partials/_right_recs.html" %}
       {% include "partials/_gen.html" %}
     </div>

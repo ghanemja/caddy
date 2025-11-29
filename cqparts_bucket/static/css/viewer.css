@@ -60,6 +60,29 @@ body.right-collapsed #right {
   overflow: auto;
 }
 
+.resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 100;
+  background: transparent;
+  transition: background 0.2s;
+}
+
+.resize-handle:hover {
+  background: #3b82f6;
+}
+
+#leftResizeHandle {
+  right: -2px;
+}
+
+#rightResizeHandle {
+  left: -2px;
+}
+
 #left h3,
 #right h3 {
   margin: 10px 12px;
