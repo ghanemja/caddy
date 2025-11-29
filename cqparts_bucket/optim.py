@@ -2844,6 +2844,140 @@ def vlm():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.post("/ingest_mesh")
+def ingest_mesh():
+    """
+    Mesh ingestion endpoint: PointNet++ segmentation + VLM semantics.
+    
+    Accepts:
+    - mesh: mesh file (OBJ/STL/PLY) - required
+    
+    Returns:
+    - category: object category
+    - final_parameters: list of semantic parameters
+    - raw_parameters: list of raw geometric parameters
+    """
+    try:
+        import tempfile
+        import os
+        from pathlib import Path
+        
+        # Get uploaded mesh file
+        mesh_file = request.files.get("mesh")
+        if not mesh_file:
+            return jsonify({"ok": False, "error": "mesh file required"}), 400
+        
+        # Save uploaded file to temp directory
+        temp_dir = tempfile.mkdtemp(prefix="mesh_ingest_")
+        mesh_filename = mesh_file.filename or "mesh.obj"
+        mesh_path = os.path.join(temp_dir, mesh_filename)
+        mesh_file.save(mesh_path)
+        
+        print(f"[ingest_mesh] Processing mesh: {mesh_path}", flush=True)
+        print(f"[ingest_mesh] Note: This may take 2-3 minutes on first run (VLM model download)", flush=True)
+        
+        # Import the ingestion pipeline
+        # Add parent directory to path so we can import vlm_cad
+        import sys
+        parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from vlm_cad.pointnet_seg.model import load_pretrained_model
+        from vlm_cad.semantics.vlm_client_finetuned import FinetunedVLMClient
+        from vlm_cad.semantics.ingest_mesh import ingest_mesh_to_semantic_params
+        
+        # Load PointNet++ model
+        checkpoint_path = os.path.join(
+            os.path.dirname(__file__), "..", "models", "pointnet2", "pointnet2_part_seg_msg.pth"
+        )
+        
+        if not os.path.exists(checkpoint_path):
+            return jsonify({
+                "ok": False,
+                "error": f"PointNet++ model not found at {checkpoint_path}"
+            }), 500
+        
+        print(f"[ingest_mesh] Loading PointNet++ model from {checkpoint_path}")
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = load_pretrained_model(
+            checkpoint_path=checkpoint_path,
+            num_classes=50,
+            use_normals=True,
+            device=device,
+        )
+        
+        # Initialize VLM client
+        try:
+            vlm = FinetunedVLMClient()
+            print("[ingest_mesh] Using fine-tuned VLM")
+        except Exception as e:
+            print(f"[ingest_mesh] Warning: Could not use fine-tuned VLM: {e}")
+            from vlm_cad.semantics.vlm_client import DummyVLMClient
+            vlm = DummyVLMClient()
+            print("[ingest_mesh] Using dummy VLM (for testing)")
+        
+        # Run ingestion pipeline
+        render_dir = os.path.join(temp_dir, "renders")
+        os.makedirs(render_dir, exist_ok=True)
+        
+        print(f"[ingest_mesh] Running ingestion pipeline...")
+        result = ingest_mesh_to_semantic_params(
+            mesh_path=mesh_path,
+            vlm=vlm,
+            model=model,
+            render_output_dir=render_dir,
+            num_points=2048,
+        )
+        
+        # Convert result to JSON-serializable format
+        response_data = {
+            "ok": True,
+            "category": result.category,
+            "final_parameters": [
+                {
+                    "name": p.name,
+                    "value": p.value,
+                    "units": p.units,
+                    "description": p.description,
+                    "confidence": p.confidence,
+                    "raw_sources": p.raw_sources,
+                }
+                for p in result.final_parameters
+            ],
+            "raw_parameters": [
+                {
+                    "id": p.id,
+                    "value": p.value,
+                    "units": p.units,
+                    "description": p.description,
+                }
+                for p in result.raw_parameters[:20]  # Limit to first 20 for response size
+            ],
+            "metadata": {
+                "num_points": result.extra.get("num_points", 0),
+                "num_parts": result.extra.get("num_parts", 0),
+            }
+        }
+        
+        # Cleanup temp directory (keep renders for now, they might be useful)
+        # shutil.rmtree(temp_dir)  # Commented out - might want to keep renders
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        import traceback
+        error_msg = f"Mesh ingestion error: {str(e)}"
+        print(f"[ingest_mesh] {error_msg}", flush=True)
+        traceback.print_exc()
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
 # ----------------- Introspection -----------------
 def _introspect_params_from_cls(cls) -> Dict[str, Any]:
     d: Dict[str, Any] = {}

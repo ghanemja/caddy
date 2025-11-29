@@ -1476,6 +1476,114 @@ function animate() {
 }
 
 // Initial resize to ensure canvas is properly sized
+// Mesh ingestion handlers
+const meshFile = document.getElementById('meshFile');
+const clearMesh = document.getElementById('clearMesh');
+const ingestMesh = document.getElementById('ingestMesh');
+const meshIngestStatus = document.getElementById('meshIngestStatus');
+const meshIngestResults = document.getElementById('meshIngestResults');
+const meshCategory = document.getElementById('meshCategory');
+const meshParameters = document.getElementById('meshParameters');
+
+if (clearMesh) {
+    clearMesh.onclick = () => {
+        if (meshFile) meshFile.value = '';
+        if (meshIngestStatus) meshIngestStatus.textContent = '';
+        if (meshIngestResults) meshIngestResults.style.display = 'none';
+    };
+}
+
+if (ingestMesh) {
+    ingestMesh.onclick = async () => {
+        if (!meshFile || !meshFile.files || !meshFile.files[0]) {
+            if (meshIngestStatus) {
+                meshIngestStatus.textContent = 'Please select a mesh file first.';
+                meshIngestStatus.style.color = '#b45309';
+            }
+            return;
+        }
+
+        const file = meshFile.files[0];
+        if (meshIngestStatus) {
+            meshIngestStatus.textContent = 'Processing mesh... (First run may take 2-3 minutes to download VLM model)';
+            meshIngestStatus.style.color = '#64748b';
+        }
+        if (meshIngestResults) meshIngestResults.style.display = 'none';
+        ingestMesh.disabled = true;
+
+        try {
+            const data = new FormData();
+            data.append('mesh', file);
+
+            const r = await fetch('/ingest_mesh', { method: 'POST', body: data });
+            if (!r.ok) {
+                const err = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+                throw new Error(err.error || `HTTP ${r.status}`);
+            }
+
+            const result = await r.json();
+            if (!result.ok) {
+                throw new Error(result.error || 'Unknown error');
+            }
+
+            // Display results
+            if (meshIngestStatus) {
+                meshIngestStatus.textContent = '✓ Analysis complete!';
+                meshIngestStatus.style.color = '#059669';
+            }
+
+            if (meshCategory) {
+                meshCategory.textContent = `Category: ${result.category || 'Unknown'}`;
+            }
+
+            if (meshParameters) {
+                let html = '';
+                if (result.final_parameters && result.final_parameters.length > 0) {
+                    html += '<div style="margin-bottom: 12px;"><strong>Semantic Parameters:</strong></div>';
+                    result.final_parameters.forEach(p => {
+                        const units = p.units ? ` ${p.units}` : '';
+                        const conf = p.confidence ? ` (conf: ${(p.confidence * 100).toFixed(0)}%)` : '';
+                        html += `<div style="margin: 4px 0; padding: 4px; background: #f8fafc; border-radius: 4px;">`;
+                        html += `<strong>${p.name}</strong>: ${p.value.toFixed(4)}${units}${conf}<br>`;
+                        html += `<span style="color: #64748b; font-size: 11px;">${p.description || ''}</span>`;
+                        html += `</div>`;
+                    });
+                } else {
+                    html += '<div style="color: #64748b;">No semantic parameters extracted.</div>';
+                }
+
+                if (result.raw_parameters && result.raw_parameters.length > 0) {
+                    html += '<div style="margin-top: 12px; margin-bottom: 8px;"><strong>Raw Parameters (first 10):</strong></div>';
+                    result.raw_parameters.slice(0, 10).forEach(p => {
+                        const units = p.units ? ` ${p.units}` : '';
+                        html += `<div style="margin: 2px 0; font-size: 11px; color: #64748b;">`;
+                        html += `${p.id}: ${p.value.toFixed(4)}${units}`;
+                        html += `</div>`;
+                    });
+                }
+
+                meshParameters.innerHTML = html;
+            }
+
+            if (meshIngestResults) meshIngestResults.style.display = 'block';
+
+            // Log to console
+            console.log('[mesh_ingest] Results:', result);
+            logLine(`Mesh analysis complete: ${result.category} with ${result.final_parameters?.length || 0} semantic parameters`, 'ok');
+
+        } catch (e) {
+            if (meshIngestStatus) {
+                meshIngestStatus.textContent = `✗ Error: ${e.message}`;
+                meshIngestStatus.style.color = '#dc2626';
+            }
+            console.error('[mesh_ingest] Error:', e);
+            logLine(`Mesh ingestion error: ${e.message}`, 'err');
+        } finally {
+            ingestMesh.disabled = false;
+        }
+    };
+}
+
 window.addEventListener('load', () => {
     setTimeout(() => {
         resize();
@@ -1491,10 +1599,21 @@ function setupResizablePanels() {
   const leftResizeHandle = document.getElementById('leftResizeHandle');
   const rightResizeHandle = document.getElementById('rightResizeHandle');
   
+  // Minimum widths to ensure panels are always visible
+  const MIN_PANEL_WIDTH = 150;  // Minimum width for each panel
+  const MIN_CANVAS_WIDTH = 200;  // Minimum width for canvas area
+  
   function resizeLeft(e) {
     e.preventDefault();
+    const windowWidth = window.innerWidth;
+    const currentRightWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--right')) || 380;
+    
+    // Calculate maximum left width: window width - min right panel - min canvas
+    const maxLeftWidth = windowWidth - MIN_PANEL_WIDTH - MIN_CANVAS_WIDTH;
     const newWidth = e.clientX;
-    if (newWidth >= 200 && newWidth <= window.innerWidth * 0.5) {
+    
+    // Constrain: min panel width <= newWidth <= max (ensuring right panel and canvas have space)
+    if (newWidth >= MIN_PANEL_WIDTH && newWidth <= maxLeftWidth) {
       document.documentElement.style.setProperty('--sidebar', `${newWidth}px`);
       localStorage.setItem('sidebar-width', newWidth);
       window.dispatchEvent(new Event('resize'));
@@ -1503,8 +1622,15 @@ function setupResizablePanels() {
   
   function resizeRight(e) {
     e.preventDefault();
-    const newWidth = window.innerWidth - e.clientX;
-    if (newWidth >= 200 && newWidth <= window.innerWidth * 0.5) {
+    const windowWidth = window.innerWidth;
+    const currentLeftWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar')) || 320;
+    
+    // Calculate maximum right width: window width - min left panel - min canvas
+    const maxRightWidth = windowWidth - MIN_PANEL_WIDTH - MIN_CANVAS_WIDTH;
+    const newWidth = windowWidth - e.clientX;
+    
+    // Constrain: min panel width <= newWidth <= max (ensuring left panel and canvas have space)
+    if (newWidth >= MIN_PANEL_WIDTH && newWidth <= maxRightWidth) {
       document.documentElement.style.setProperty('--right', `${newWidth}px`);
       localStorage.setItem('right-width', newWidth);
       window.dispatchEvent(new Event('resize'));
@@ -1531,15 +1657,56 @@ function setupResizablePanels() {
     });
   }
   
-  // Restore saved widths
+  // Restore saved widths, but enforce constraints
   const savedLeftWidth = localStorage.getItem('sidebar-width');
   const savedRightWidth = localStorage.getItem('right-width');
+  const windowWidth = window.innerWidth;
+  
   if (savedLeftWidth) {
-    document.documentElement.style.setProperty('--sidebar', `${savedLeftWidth}px`);
+    const leftWidth = parseFloat(savedLeftWidth);
+    const maxLeftWidth = windowWidth - MIN_PANEL_WIDTH - MIN_CANVAS_WIDTH;
+    const constrainedLeftWidth = Math.max(MIN_PANEL_WIDTH, Math.min(leftWidth, maxLeftWidth));
+    document.documentElement.style.setProperty('--sidebar', `${constrainedLeftWidth}px`);
+    // Update saved value if it was constrained
+    if (constrainedLeftWidth !== leftWidth) {
+      localStorage.setItem('sidebar-width', constrainedLeftWidth);
+    }
   }
+  
   if (savedRightWidth) {
-    document.documentElement.style.setProperty('--right', `${savedRightWidth}px`);
+    const rightWidth = parseFloat(savedRightWidth);
+    const currentLeftWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar')) || 320;
+    const maxRightWidth = windowWidth - MIN_PANEL_WIDTH - MIN_CANVAS_WIDTH;
+    const constrainedRightWidth = Math.max(MIN_PANEL_WIDTH, Math.min(rightWidth, maxRightWidth));
+    document.documentElement.style.setProperty('--right', `${constrainedRightWidth}px`);
+    // Update saved value if it was constrained
+    if (constrainedRightWidth !== rightWidth) {
+      localStorage.setItem('right-width', constrainedRightWidth);
+    }
   }
+  
+  // Also enforce constraints on window resize
+  window.addEventListener('resize', () => {
+    const currentLeftWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar')) || 320;
+    const currentRightWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--right')) || 380;
+    const windowWidth = window.innerWidth;
+    
+    // Check and fix left panel
+    const maxLeftWidth = windowWidth - MIN_PANEL_WIDTH - MIN_CANVAS_WIDTH;
+    if (currentLeftWidth > maxLeftWidth) {
+      const constrainedLeftWidth = Math.max(MIN_PANEL_WIDTH, maxLeftWidth);
+      document.documentElement.style.setProperty('--sidebar', `${constrainedLeftWidth}px`);
+      localStorage.setItem('sidebar-width', constrainedLeftWidth);
+    }
+    
+    // Check and fix right panel
+    const maxRightWidth = windowWidth - MIN_PANEL_WIDTH - MIN_CANVAS_WIDTH;
+    if (currentRightWidth > maxRightWidth) {
+      const constrainedRightWidth = Math.max(MIN_PANEL_WIDTH, maxRightWidth);
+      document.documentElement.style.setProperty('--right', `${constrainedRightWidth}px`);
+      localStorage.setItem('right-width', constrainedRightWidth);
+    }
+  });
 }
 
 (async function start() {
