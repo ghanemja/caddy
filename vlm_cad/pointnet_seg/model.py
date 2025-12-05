@@ -271,6 +271,17 @@ class PointNet2PartSeg(nn.Module):
         self.fp3 = PointNetFeaturePropagation(in_channel=1536, mlp=[256, 256])
         self.fp2 = PointNetFeaturePropagation(in_channel=576, mlp=[256, 128])
         self.fp1 = PointNetFeaturePropagation(in_channel=150+additional_channel, mlp=[128, 128])
+        # Expansion layer for l0_points to match expected input channels for fp1
+        # fp1 expects: cls_label [16] + l0_xyz [3] + l0_points [131 or 134] = 150 or 153
+        # l0_points starts as [C] where C=3 or 6, needs to be expanded to 131 or 134
+        target_channels = 131 if not normal_channel else 134
+        self.l0_expand = nn.Sequential(
+            nn.Conv1d(3+additional_channel, 64, 1),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Conv1d(64, target_channels, 1),
+            nn.BatchNorm1d(target_channels),
+        )
         self.conv1 = nn.Conv1d(128, 128, 1)
         self.bn1 = nn.BatchNorm1d(128)
         self.drop1 = nn.Dropout(0.5)
@@ -295,17 +306,28 @@ class PointNet2PartSeg(nn.Module):
         l0_xyz = l0_xyz.permute(0, 2, 1)
         l0_points = l0_points.permute(0, 2, 1)
 
-        l1_xyz, l1_points = self.sa1(l0_xyz, l0_points)
-        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
+        l1_xyz, l1_points = self.sa1(l0_xyz, l0_points)  # l1_xyz: [B, 3, 512], l1_points: [B, 320, 512]
+        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)  # l2_xyz: [B, 3, 128], l2_points: [B, 512, 128]
+        # sa3 expects: xyz [B, 3, 128], points [B, 512, 128]
+        # sa3 output: xyz [B, 3, 1], points [B, 1024, 1] (after group_all)
         l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
 
         # Feature Propagation layers
-        l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points)
-        l1_points = self.fp2(l1_xyz, l2_xyz, l1_points, l2_points)
+        l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points)  # [B, 256, 128]
+        l1_points = self.fp2(l1_xyz, l2_xyz, l1_points, l2_points)  # [B, 128, 512]
         
         # Class label embedding (before fp1, as in original)
-        cls_label_one_hot = cls_label.view(B, 16, 1).repeat(1, 1, N)
-        l0_points = self.fp1(l0_xyz, l1_xyz, torch.cat([cls_label_one_hot, l0_xyz, l0_points], 1), l1_points)
+        # fp1 expects input channels: 150 (no normals) or 153 (with normals)
+        # This is: cls_label [16] + l0_xyz [3] + l0_points [131 or 134]
+        # But l0_points is raw input [B, C, N] where C=3 or 6
+        # We need to expand l0_points to have 131 or 134 channels
+        cls_label_one_hot = cls_label.view(B, 16, 1).repeat(1, 1, N)  # [B, 16, N]
+        
+        # Expand l0_points from C channels to target channels (131 or 134)
+        l0_points_expanded = self.l0_expand(l0_points)  # [B, 131 or 134, N]
+        
+        # Now concatenate: cls_label [16] + l0_xyz [3] + l0_points_expanded [131 or 134] = [B, 150 or 153, N]
+        l0_points = self.fp1(l0_xyz, l1_xyz, torch.cat([cls_label_one_hot, l0_xyz, l0_points_expanded], dim=1), l1_points)
 
         # FC layers
         feat = F.relu(self.bn1(self.conv1(l0_points)))

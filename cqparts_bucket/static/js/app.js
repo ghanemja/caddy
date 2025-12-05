@@ -1591,6 +1591,9 @@ if (ingestMesh) {
 
             if (meshIngestResults) meshIngestResults.style.display = 'block';
 
+            // Show parameter mapping popup
+            showParameterMappingPopup(result);
+
             // Log to console
             console.log('[mesh_ingest] Results:', result);
             const paramCount = (result.proposed_parameters || result.final_parameters || []).length;
@@ -1609,6 +1612,192 @@ if (ingestMesh) {
     };
 }
 
+// Parameter mapping popup functions
+function showParameterMappingPopup(result) {
+    const popup = document.getElementById('paramMappingPopup');
+    const status = document.getElementById('paramMappingStatus');
+    const content = document.getElementById('paramMappingContent');
+    const categoryEl = document.getElementById('paramCategory');
+    const partsEl = document.getElementById('paramParts');
+    const listEl = document.getElementById('paramMappingList');
+    
+    if (!popup || !status || !content || !listEl) return;
+    
+    // Show popup
+    popup.style.display = 'block';
+    status.style.display = 'none';
+    content.style.display = 'block';
+    
+    // Set category and parts
+    const category = result.category || 'Unknown';
+    const parts = result.metadata?.identified_parts || result.extra?.identified_parts || [];
+    if (categoryEl) categoryEl.textContent = category;
+    if (partsEl) partsEl.textContent = parts.length > 0 ? parts.join(', ') : 'None detected';
+    
+    // Build parameter list
+    const proposedParams = result.proposed_parameters || result.final_parameters || [];
+    listEl.innerHTML = '';
+    
+    proposedParams.forEach((p, idx) => {
+        const semanticName = p.semantic_name || p.name || `param_${idx + 1}`;
+        const paramId = p.id || `p${idx + 1}`;
+        const value = p.value || 0;
+        const units = p.units || 'normalized';
+        const description = p.description || p.proposed_description || '';
+        const confidence = p.confidence || 0;
+        
+        const paramDiv = document.createElement('div');
+        paramDiv.style.cssText = 'padding: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;';
+        paramDiv.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                <span style="font-weight: 600; color: #475569; font-size: 11px; min-width: 40px;">${paramId}</span>
+                <span style="color: #64748b; font-size: 12px;">→</span>
+                <input type="text" 
+                       id="param_name_${idx}" 
+                       value="${semanticName}" 
+                       style="flex: 1; padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px;"
+                       placeholder="Parameter name">
+            </div>
+            <div style="display: flex; gap: 8px; margin-bottom: 4px;">
+                <label style="font-size: 11px; color: #64748b; display: flex; align-items: center; gap: 4px;">
+                    Value: <input type="number" 
+                                  id="param_value_${idx}" 
+                                  value="${value.toFixed(4)}" 
+                                  step="0.001"
+                                  style="width: 80px; padding: 4px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px;">
+                </label>
+                <label style="font-size: 11px; color: #64748b; display: flex; align-items: center; gap: 4px;">
+                    Units: <input type="text" 
+                                  id="param_units_${idx}" 
+                                  value="${units}" 
+                                  style="width: 60px; padding: 4px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px;">
+                </label>
+                ${confidence > 0 ? `<span style="font-size: 10px; color: #94a3b8;">Conf: ${(confidence * 100).toFixed(0)}%</span>` : ''}
+            </div>
+            ${description ? `<div style="font-size: 10px; color: #64748b; margin-top: 4px;">${description}</div>` : ''}
+        `;
+        listEl.appendChild(paramDiv);
+    });
+    
+    // Store result for later use
+    popup._ingestResult = result;
+}
+
+function hideParameterMappingPopup() {
+    const popup = document.getElementById('paramMappingPopup');
+    if (popup) popup.style.display = 'none';
+}
+
+// Setup parameter popup handlers
+function setupParameterMappingPopup() {
+    const popup = document.getElementById('paramMappingPopup');
+    const closeBtn = document.getElementById('closeParamPopup');
+    const applyBtn = document.getElementById('applyParams');
+    const vlmBtn = document.getElementById('useVLMForParams');
+    const vlmTextarea = document.getElementById('vlmParamInstructions');
+    
+    if (closeBtn) {
+        closeBtn.onclick = hideParameterMappingPopup;
+    }
+    
+    if (applyBtn) {
+        applyBtn.onclick = () => {
+            const result = popup?._ingestResult;
+            if (!result) return;
+            
+            // Collect parameter values
+            const params = {};
+            const proposedParams = result.proposed_parameters || result.final_parameters || [];
+            
+            proposedParams.forEach((p, idx) => {
+                const nameInput = document.getElementById(`param_name_${idx}`);
+                const valueInput = document.getElementById(`param_value_${idx}`);
+                const unitsInput = document.getElementById(`param_units_${idx}`);
+                
+                if (nameInput && valueInput) {
+                    const name = nameInput.value.trim() || (p.semantic_name || p.name);
+                    const value = parseFloat(valueInput.value) || p.value;
+                    const units = unitsInput?.value.trim() || p.units || 'normalized';
+                    
+                    params[name] = { value, units, id: p.id || `p${idx + 1}` };
+                }
+            });
+            
+            console.log('[param_mapping] Applying parameters:', params);
+            logLine(`Applied ${Object.keys(params).length} parameters`, 'ok');
+            
+            // TODO: Apply parameters to code/model
+            // This would need to integrate with the code generation system
+            
+            hideParameterMappingPopup();
+        };
+    }
+    
+    if (vlmBtn && vlmTextarea) {
+        vlmBtn.onclick = () => {
+            if (vlmTextarea.style.display === 'none') {
+                vlmTextarea.style.display = 'block';
+                vlmBtn.textContent = 'Apply VLM Instructions';
+            } else {
+                const instructions = vlmTextarea.value.trim();
+                if (!instructions) {
+                    alert('Please enter instructions for parameter changes');
+                    return;
+                }
+                
+                console.log('[param_mapping] VLM instructions:', instructions);
+                logLine(`Using VLM to modify parameters: ${instructions}`, 'ok');
+                
+                // TODO: Send to VLM for parameter modification
+                // This would call the VLM with the instructions and current parameters
+                
+                hideParameterMappingPopup();
+            }
+        };
+    }
+}
+
+// Setup instruction bar
+function setupInstructionBar() {
+    const instructionBar = document.getElementById('instructionBar');
+    const canvasPrompt = document.getElementById('canvasPrompt');
+    const applyBtn = document.getElementById('applyCanvasInstructions');
+    const closeBtn = document.getElementById('closeInstructionBar');
+    
+    if (closeBtn) {
+        closeBtn.onclick = () => {
+            if (instructionBar) instructionBar.style.display = 'none';
+        };
+    }
+    
+    if (applyBtn && canvasPrompt) {
+        applyBtn.onclick = () => {
+            const instructions = canvasPrompt.value.trim();
+            if (!instructions) {
+                alert('Please enter instructions');
+                return;
+            }
+            
+            console.log('[instruction_bar] Applying instructions:', instructions);
+            logLine(`Applying instructions: ${instructions}`, 'ok');
+            
+            // TODO: Send instructions to VLM for code generation
+            // This would integrate with the existing VLM code generation system
+            
+            // For now, just hide the bar
+            if (instructionBar) instructionBar.style.display = 'none';
+        };
+    }
+    
+    // Show instruction bar when needed (can be triggered from elsewhere)
+    window.showInstructionBar = () => {
+        if (instructionBar) {
+            instructionBar.style.display = 'block';
+            if (canvasPrompt) canvasPrompt.focus();
+        }
+    };
+}
+
 window.addEventListener('load', () => {
     setTimeout(() => {
         resize();
@@ -1617,7 +1806,63 @@ window.addEventListener('load', () => {
             setTimeout(resize, 100);
         }
     }, 100);
+    
+    // Setup new UI components
+    setupParameterMappingPopup();
+    setupInstructionBar();
+    
+    // Load default STL file for mesh ingestion
+    loadDefaultMesh();
 });
+
+// Load default STL file
+function loadDefaultMesh() {
+    const meshFile = document.getElementById('meshFile');
+    if (!meshFile) return;
+    
+    const defaultPath = '/Users/janelleg/Downloads/Curiosity Rover 3D Printed Model/Simplified Curiosity Model (Small)/STL Files/body-small.STL';
+    
+    // Check if file exists via fetch (this won't work for local files, so we'll need a server endpoint)
+    // For now, we'll create a button to load it
+    const ingestSection = document.getElementById('meshIngestSection');
+    if (ingestSection) {
+        const loadDefaultBtn = document.createElement('button');
+        loadDefaultBtn.textContent = 'Load Demo (Curiosity Rover)';
+        loadDefaultBtn.style.cssText = 'width: 100%; margin-top: 8px; padding: 8px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;';
+        loadDefaultBtn.onclick = async () => {
+            try {
+                // Fetch the file from server (we'll need to add an endpoint)
+                const response = await fetch('/demo/curiosity_rover.stl');
+                if (!response.ok) throw new Error('File not found');
+                
+                const blob = await response.blob();
+                const file = new File([blob], 'body-small.STL', { type: 'model/stl' });
+                
+                // Create a DataTransfer to set the file input
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(file);
+                meshFile.files = dataTransfer.files;
+                
+                // Trigger change event
+                meshFile.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                logLine('Loaded default Curiosity Rover STL file', 'ok');
+            } catch (e) {
+                console.error('[load_default_mesh]', e);
+                logLine(`Could not load default mesh: ${e.message}`, 'err');
+                alert('Could not load default mesh. Please upload the file manually.');
+            }
+        };
+        
+        const sectionBody = ingestSection.querySelector('.section-body');
+        if (sectionBody) {
+            const existingBtn = sectionBody.querySelector('button[onclick*="curiosity"]');
+            if (!existingBtn) {
+                sectionBody.insertBefore(loadDefaultBtn, sectionBody.firstChild);
+            }
+        }
+    }
+}
 
 // Resizable panels
 function setupResizablePanels() {

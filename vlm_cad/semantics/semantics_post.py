@@ -8,7 +8,7 @@ This module uses a VLM to:
 """
 
 from dataclasses import dataclass
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import json
 
 from .vlm_client import VLMClient, VLMImage, VLMMessage
