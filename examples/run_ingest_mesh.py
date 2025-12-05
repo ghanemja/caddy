@@ -102,12 +102,20 @@ def main():
         print(f"{'=' * 60}\n")
         
         print(f"Category: {result.category}")
-        print(f"\nFinal Semantic Parameters ({len(result.final_parameters)}):")
+        print(f"\nRaw Parameters ({len(result.raw_parameters)}):")
+        print("-" * 60)
+        for param in result.raw_parameters[:5]:  # Show first 5
+            units_str = f" {param.units}" if param.units else ""
+            print(f"  • {param.id}: {param.value:.4f}{units_str} - {param.description}")
+        if len(result.raw_parameters) > 5:
+            print(f"  ... and {len(result.raw_parameters) - 5} more")
+        
+        print(f"\nProposed Semantic Parameters ({len(result.proposed_parameters)}):")
         print("-" * 60)
         
-        for param in result.final_parameters:
+        for param in result.proposed_parameters:
             units_str = f" {param.units}" if param.units else ""
-            print(f"  • {param.name} = {param.value:.4f}{units_str}")
+            print(f"  • {param.id} → {param.semantic_name} = {param.value:.4f}{units_str}")
             print(f"    Description: {param.description}")
             print(f"    Confidence: {param.confidence:.2f}")
             if param.raw_sources:

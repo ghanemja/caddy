@@ -35,11 +35,17 @@ from .types import RawParameter, FinalParameter
 class IngestResult:
     """Final result from mesh ingestion pipeline."""
     category: str
-    final_parameters: "List[FinalParameter]"
+    raw_parameters: "List[RawParameter]"  # Generic parameters (p1, p2, p3, ...)
+    proposed_parameters: "List[FinalParameter]"  # Proposed semantic names (for user confirmation)
     pre_output: "PreVLMOutput"
     post_output: "PostVLMOutput"
-    raw_parameters: "List[RawParameter]"
     extra: Dict[str, Any]
+    
+    # Backward compatibility: final_parameters as alias for proposed_parameters
+    @property
+    def final_parameters(self) -> "List[FinalParameter]":
+        """Backward compatibility: return proposed_parameters."""
+        return self.proposed_parameters
 
 
 def render_mesh_views(
@@ -147,31 +153,38 @@ def _extract_raw_parameters(
     global_extent = global_max - global_min
     global_center = (global_min + global_max) / 2.0
     
+    param_counter = 1  # Start at p1
+    
     # Add global parameters
     raw_params.append(
         RawParameter(
-            id="bbox_x_length",
+            id=f"p{param_counter}",
             value=float(global_extent[0]),
             units="normalized",
             description="Global bounding box length along X axis",
         )
     )
+    param_counter += 1
+    
     raw_params.append(
         RawParameter(
-            id="bbox_y_length",
+            id=f"p{param_counter}",
             value=float(global_extent[1]),
             units="normalized",
             description="Global bounding box length along Y axis",
         )
     )
+    param_counter += 1
+    
     raw_params.append(
         RawParameter(
-            id="bbox_z_length",
+            id=f"p{param_counter}",
             value=float(global_extent[2]),
             units="normalized",
             description="Global bounding box length along Z axis",
         )
     )
+    param_counter += 1
     
     # Add per-part parameters
     for label_id, stat in stats.items():
@@ -183,33 +196,39 @@ def _extract_raw_parameters(
         for axis_idx, axis_name in enumerate(["x", "y", "z"]):
             raw_params.append(
                 RawParameter(
-                    id=f"part_{label_id}_extent_{axis_name}",
+                    id=f"p{param_counter}",
                     value=float(extent[axis_idx]),
                     units="normalized",
                     description=f"Part {label_id} extent along {axis_name} axis",
+                    part_labels=[f"part_{label_id}"],
                 )
             )
+            param_counter += 1
         
         # Part span (max extent)
         raw_params.append(
             RawParameter(
-                id=f"part_{label_id}_span",
+                id=f"p{param_counter}",
                 value=float(np.max(extent)),
                 units="normalized",
                 description=f"Part {label_id} maximum span",
+                part_labels=[f"part_{label_id}"],
             )
         )
+        param_counter += 1
         
         # Part center coordinates
         for axis_idx, axis_name in enumerate(["x", "y", "z"]):
             raw_params.append(
                 RawParameter(
-                    id=f"part_{label_id}_center_{axis_name}",
+                    id=f"p{param_counter}",
                     value=float(center[axis_idx]),
                     units="normalized",
                     description=f"Part {label_id} center coordinate along {axis_name}",
+                    part_labels=[f"part_{label_id}"],
                 )
             )
+            param_counter += 1
     
     return raw_params
 
@@ -265,28 +284,36 @@ def ingest_mesh_to_semantic_params(
     raw_parameters = _extract_raw_parameters(points, labels, pre_output.category)
     print(f"[Ingest] Extracted {len(raw_parameters)} raw parameters", flush=True)
     
-    # Step 5: Post-VLM - refine parameters
-    print(f"[Ingest] Running post-VLM refinement...", flush=True)
+    # Step 5: Post-VLM - propose semantic names for generic parameters
+    print(f"[Ingest] Running post-VLM semantic name proposal...", flush=True)
+    
+    # Extract part labels from segmentation for context
+    unique_labels = np.unique(labels)
+    part_labels = [f"part_{int(label_id)}" for label_id in unique_labels]
+    
     post_output = refine_parameters_with_vlm(
         image_paths,
         pre_output,
         raw_parameters,
         vlm,
+        part_labels=part_labels,
     )
-    print(f"[Ingest] Final parameters: {len(post_output.final_parameters)}", flush=True)
+    print(f"[Ingest] Proposed semantic parameters: {len(post_output.final_parameters)}", flush=True)
     
     # Step 6: Build result
     result = IngestResult(
         category=pre_output.category,
-        final_parameters=post_output.final_parameters,
+        raw_parameters=raw_parameters,  # Generic parameters (p1, p2, p3, ...)
+        proposed_parameters=post_output.final_parameters,  # Proposed semantic names
         pre_output=pre_output,
         post_output=post_output,
-        raw_parameters=raw_parameters,
         extra={
             "num_points": len(points),
             "num_parts": len(np.unique(labels)),
             "image_paths": image_paths,
             "mesh_path": mesh_path,
+            "part_labels": part_labels,
+            "identified_parts": pre_output.parts,  # Parts identified by pre-VLM
         },
     )
     

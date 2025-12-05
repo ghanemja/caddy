@@ -104,68 +104,49 @@ class DummyVLMClient:
             return {"status": "ok", "message": "Dummy response"}
     
     def _dummy_pre_vlm_response(self) -> Dict[str, Any]:
-        """Return dummy pre-VLM response."""
-        # Try to infer category from context (simplified)
-        categories = ["Airplane", "Chair", "Car", "Table", "Lamp"]
-        category = categories[0]  # Default to Airplane
-        
-        # Generate candidate parameters based on category
-        if category == "Airplane":
-            candidate_params = [
-                {"name": "wing_span", "description": "Distance between wing tips"},
-                {"name": "chord_length", "description": "Average width of the wing"},
-                {"name": "fuselage_length", "description": "Length of the main body"},
-                {"name": "tail_height", "description": "Height of the tail fin"},
-            ]
-        elif category == "Chair":
-            candidate_params = [
-                {"name": "seat_height", "description": "Height of the seat from ground"},
-                {"name": "back_height", "description": "Height of the backrest"},
-                {"name": "seat_width", "description": "Width of the seat"},
-                {"name": "leg_length", "description": "Length of chair legs"},
-            ]
-        elif category == "Car":
-            candidate_params = [
-                {"name": "wheelbase", "description": "Distance between front and rear axles"},
-                {"name": "length", "description": "Overall length of the vehicle"},
-                {"name": "width", "description": "Overall width of the vehicle"},
-                {"name": "height", "description": "Overall height of the vehicle"},
-            ]
-        else:
-            candidate_params = [
-                {"name": "length", "description": "Main length dimension"},
-                {"name": "width", "description": "Main width dimension"},
-                {"name": "height", "description": "Main height dimension"},
-            ]
+        """Return dummy pre-VLM response matching the new schema."""
+        # Default to airplane
+        category = "airplane"
+        parts = ["fuselage", "left_wing", "right_wing", "tail"]
+        candidate_params = [
+            {"name": "wing_span", "description": "Distance between wing tips"},
+            {"name": "chord_length", "description": "Average width of the wing"},
+            {"name": "fuselage_length", "description": "Length of the main body"},
+            {"name": "tail_height", "description": "Height of the tail fin"},
+        ]
         
         return {
             "category": category,
+            "parts": parts,
             "candidate_parameters": candidate_params,
         }
     
     def _dummy_post_vlm_response(self) -> Dict[str, Any]:
-        """Return dummy post-VLM response."""
-        # Generate a few final parameters with dummy values
-        final_params = [
+        """Return dummy post-VLM response with proposed semantic names."""
+        # Generate proposals for generic parameters (p1, p2, p3, ...)
+        # This matches the new structure where VLM proposes names for generic IDs
+        proposed_params = [
             {
-                "name": "wing_span",
-                "value": 2.5,
-                "units": "m",
-                "description": "Distance between wing tips",
+                "id": "p1",
+                "proposed_name": "wing_span",
+                "proposed_description": "Distance between wing tips",
                 "confidence": 0.85,
-                "raw_sources": ["bbox_x_length", "wing_segment_0_span"],
             },
             {
-                "name": "chord_length",
-                "value": 0.3,
-                "units": "m",
-                "description": "Average width of the wing",
+                "id": "p2",
+                "proposed_name": "chord_length",
+                "proposed_description": "Average width of the wing",
                 "confidence": 0.75,
-                "raw_sources": ["bbox_y_length", "wing_segment_0_extent_y"],
+            },
+            {
+                "id": "p3",
+                "proposed_name": "fuselage_length",
+                "proposed_description": "Length of the main body",
+                "confidence": 0.80,
             },
         ]
         
         return {
-            "final_parameters": final_params,
+            "parameters": proposed_params,
         }
 

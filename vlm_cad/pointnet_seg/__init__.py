@@ -9,7 +9,7 @@ This module provides:
 """
 
 from .model import PointNet2PartSegWrapper, load_pretrained_model
-from .inference import segment_mesh
+from .inference import segment_mesh, segment_point_cloud
 from .mesh_io import load_mesh_as_point_cloud
 from .geometry import (
     compute_part_bounding_boxes,
@@ -22,6 +22,7 @@ __all__ = [
     "PointNet2PartSegWrapper",
     "load_pretrained_model",
     "segment_mesh",
+    "segment_point_cloud",
     "load_mesh_as_point_cloud",
     "compute_part_bounding_boxes",
     "axis_extent",

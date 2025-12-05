@@ -59,6 +59,8 @@ def segment_mesh(
     # Run inference
     model.model.eval()
     with torch.no_grad():
+        # Model wrapper's forward expects (points, return_labels)
+        # It handles cls_label internally
         logits = model.forward(input_tensor, return_labels=False)  # [1, N, num_classes]
         labels = torch.argmax(logits, dim=-1)  # [1, N]
     
@@ -119,6 +121,8 @@ def segment_point_cloud(
     # Run inference
     model.model.eval()
     with torch.no_grad():
+        # Model wrapper's forward expects (points, return_labels)
+        # It handles cls_label internally
         logits = model.forward(input_tensor, return_labels=False)
         labels = torch.argmax(logits, dim=-1)
     

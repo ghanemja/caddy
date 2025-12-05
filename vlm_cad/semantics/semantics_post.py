@@ -28,82 +28,127 @@ def refine_parameters_with_vlm(
     pre_output: PreVLMOutput,
     raw_parameters: List[RawParameter],
     vlm: VLMClient,
+    part_labels: Optional[List[str]] = None,
 ) -> PostVLMOutput:
     """
-    Use the VLM to reconcile candidate semantic params with raw geometric params.
+    Use the VLM to propose semantic names for generic raw parameters (p1, p2, ...).
     
     Args:
         image_paths: list of paths to rendered images (optional, for context)
         pre_output: output from pre-VLM step (category + candidate params)
-        raw_parameters: raw geometric parameters from PointNet++ segmentation
+        raw_parameters: raw geometric parameters with generic IDs (p1, p2, p3, ...)
         vlm: VLM client instance
+        part_labels: optional list of detected part names from segmentation
         
     Returns:
-        PostVLMOutput with final semantic parameters
+        PostVLMOutput with proposed semantic parameters
     """
     # Build system prompt
-    system_prompt = """You are a 3D geometry parameter mapping assistant. Your task is to:
-1. Map candidate semantic parameter names to raw geometric parameters
-2. Compute semantic parameter values from raw parameters
-3. Assign confidence scores (0.0 to 1.0) to each mapping
-4. Drop parameters that are irrelevant or cannot be reliably computed
+    system_prompt = """You are assisting with naming geometric parameters for a 3D model.
 
-You will receive:
-- The object category
-- Candidate semantic parameters (names + descriptions)
-- Raw geometric parameters (IDs + values + descriptions)
+You will be given:
+- The object's predicted category and part list.
+- A set of RAW geometric parameters, each having:
+    id: "p1", "p2", ...
+    value: numeric measurement
+    units: e.g. "m" or "normalized"
+    description: explanation of the geometry
+- Candidate semantic names from a previous step.
 
-For each candidate parameter, determine:
-- Which raw parameter(s) should be used to compute it
-- The computed value
-- Appropriate units
-- A confidence score
+Your tasks:
 
-Return a JSON response with final_parameters array."""
+1. For each raw parameter (p1, p2, ...), propose a meaningful semantic name.
+   - Use the object's category and parts to decide names.
+   - Example for airplanes:
+       p1 → wing_span
+       p2 → chord_length
+       p3 → fuselage_length
+   - For furniture:
+       p1 → seat_height
+       p2 → backrest_height
+   - If unsure, propose generic names:
+       p1 → major_extent, p2 → minor_extent
 
-    # Serialize inputs for user message
-    candidate_params_str = json.dumps([
-        {"name": p.name, "description": p.description}
-        for p in pre_output.candidate_parameters
-    ], indent=2)
-    
-    raw_params_str = json.dumps([
-        {
+2. For each proposed name, create:
+   - A human-readable description
+   - A confidence score between 0 and 1
+
+3. Output ONLY JSON using this structure:
+{
+  "parameters": [
+    {
+      "id": "p1",
+      "proposed_name": "wing_span",
+      "proposed_description": "Distance between wing tips",
+      "confidence": 0.94
+    },
+    {
+      "id": "p2",
+      "proposed_name": "chord_length",
+      "proposed_description": "Distance from leading to trailing edge",
+      "confidence": 0.89
+    }
+  ]
+}"""
+
+    # Serialize raw parameters with all available info
+    raw_params_data = []
+    for p in raw_parameters:
+        param_dict = {
             "id": p.id,
             "value": p.value,
-            "units": p.units,
+            "units": p.units or "normalized",
             "description": p.description,
         }
-        for p in raw_parameters
-    ], indent=2)
+        if p.part_labels:
+            param_dict["part_labels"] = p.part_labels
+        raw_params_data.append(param_dict)
+    
+    raw_params_str = json.dumps(raw_params_data, indent=2)
+    
+    # Build part labels info
+    part_info = ""
+    if part_labels:
+        part_info = f"\nDetected parts: {', '.join(part_labels)}"
+    elif raw_parameters:
+        # Extract unique part labels from raw parameters
+        unique_parts = set()
+        for p in raw_parameters:
+            if p.part_labels:
+                unique_parts.update(p.part_labels)
+        if unique_parts:
+            part_info = f"\nDetected parts: {', '.join(sorted(unique_parts))}"
     
     schema_hint = """{
-  "final_parameters": [
+  "parameters": [
     {
-      "name": "string (semantic name)",
-      "value": float,
-      "units": "string or null",
-      "description": "string",
-      "confidence": float (0.0 to 1.0),
-      "raw_sources": ["string (raw param IDs)"]
+      "id": "string (e.g., p1, p2, p3)",
+      "proposed_name": "string (semantic name like wing_span, chord_length)",
+      "proposed_description": "string (human-readable description)",
+      "confidence": float (0.0 to 1.0)
     }
   ]
 }"""
     
+    # Build candidate parameters context (if available)
+    candidate_params_str = ""
+    if pre_output.candidate_parameters:
+        candidate_list = [f"- {p.name}: {p.description}" for p in pre_output.candidate_parameters[:10]]
+        candidate_params_str = f"\n\nCandidate semantic names from previous step:\n" + "\n".join(candidate_list)
+    
     user_message = f"""Object category: {pre_output.category}
+Parts identified: {', '.join(pre_output.parts) if pre_output.parts else 'None specified'}{part_info}{candidate_params_str}
 
-Candidate semantic parameters:
-{candidate_params_str}
-
-Raw geometric parameters:
+Raw geometric parameters (p1, p2, p3, ...):
 {raw_params_str}
 
-Map the candidate parameters to raw parameters and compute values.
+For each raw parameter, propose a meaningful semantic name based on:
+- The object category ({pre_output.category})
+- The identified parts: {', '.join(pre_output.parts) if pre_output.parts else 'None'}
+- The geometric description of each parameter
+- Candidate semantic names (if provided above)
 
-Expected JSON schema:
-{schema_hint}
-
-Return the JSON response now."""
+Return ONLY valid JSON matching the specified structure."""
 
     # Prepare images (optional, for context)
     images = [VLMImage(path=path) for path in image_paths] if image_paths else None
@@ -128,27 +173,32 @@ Return the JSON response now."""
     
     # Parse response
     try:
-        final_params_raw = response.get("final_parameters", [])
+        # VLM returns parameters array with proposed names
+        proposed_params_raw = response.get("parameters", [])
         final_params = []
         
-        for param in final_params_raw:
+        # Create a lookup for raw parameters by ID
+        raw_param_lookup = {p.id: p for p in raw_parameters}
+        
+        for param in proposed_params_raw:
             if isinstance(param, dict):
-                name = param.get("name", "")
-                value = param.get("value", 0.0)
-                units = param.get("units")
-                description = param.get("description", "")
+                param_id = param.get("id", "")
+                proposed_name = param.get("proposed_name", "")
+                proposed_description = param.get("proposed_description", "")
                 confidence = param.get("confidence", 0.5)
-                raw_sources = param.get("raw_sources", [])
                 
-                if name:
+                # Find the corresponding raw parameter
+                raw_param = raw_param_lookup.get(param_id)
+                if raw_param and proposed_name:
                     final_params.append(
                         FinalParameter(
-                            name=name,
-                            value=float(value),
-                            units=units,
-                            description=description,
+                            id=param_id,
+                            semantic_name=proposed_name,
+                            value=raw_param.value,
+                            units=raw_param.units,
+                            description=proposed_description or raw_param.description,
                             confidence=float(confidence),
-                            raw_sources=raw_sources if isinstance(raw_sources, list) else [],
+                            raw_sources=[param_id],  # Typically just the ID itself
                         )
                     )
         
@@ -159,6 +209,8 @@ Return the JSON response now."""
     
     except Exception as e:
         print(f"[Post-VLM] Error parsing response: {e}")
+        import traceback
+        traceback.print_exc()
         # Fallback
         return _fallback_parameter_mapping(pre_output, raw_parameters)
 
@@ -168,26 +220,27 @@ def _fallback_parameter_mapping(
     raw_parameters: List[RawParameter],
 ) -> PostVLMOutput:
     """
-    Fallback heuristic: create default parameter mappings.
+    Fallback heuristic: create default parameter mappings with generic names.
     
     This is used when VLM response is malformed or unavailable.
     """
     final_params = []
     
-    # Map first few candidate params to first few raw params
-    num_to_map = min(len(pre_output.candidate_parameters), len(raw_parameters))
-    
-    for i in range(num_to_map):
-        candidate = pre_output.candidate_parameters[i]
-        raw = raw_parameters[i]
+    # Use first few candidate params as semantic names, or generate generic ones
+    for i, raw in enumerate(raw_parameters[:10]):  # Limit to first 10
+        if i < len(pre_output.candidate_parameters):
+            semantic_name = pre_output.candidate_parameters[i].name
+        else:
+            semantic_name = f"param_{i+1}"  # Generic fallback
         
         final_params.append(
             FinalParameter(
-                name=candidate.name,
+                id=raw.id,
+                semantic_name=semantic_name,
                 value=raw.value,
                 units=raw.units,
-                description=candidate.description,
-                confidence=0.5,  # Low confidence for fallback
+                description=raw.description,
+                confidence=0.3,  # Low confidence for fallback
                 raw_sources=[raw.id],
             )
         )
@@ -196,4 +249,36 @@ def _fallback_parameter_mapping(
         final_parameters=final_params,
         raw_response={"fallback": True},
     )
+
+
+def build_user_review_payload(final_parameters: List[FinalParameter]) -> Dict[str, Any]:
+    """
+    Build a JSON-ready structure for frontend user review/confirmation.
+    
+    Each item contains:
+    - id (p1, p2, p3, ...)
+    - proposed semantic name
+    - proposed description
+    - confidence
+    - value + units
+    
+    Args:
+        final_parameters: List of FinalParameter objects with proposed semantic names
+        
+    Returns:
+        Dictionary ready for JSON serialization
+    """
+    return {
+        "parameters": [
+            {
+                "id": param.id,
+                "proposed_name": param.semantic_name,
+                "proposed_description": param.description,
+                "value": param.value,
+                "units": param.units or "normalized",
+                "confidence": param.confidence,
+            }
+            for param in final_parameters
+        ]
+    }
 

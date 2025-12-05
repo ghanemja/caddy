@@ -1533,33 +1533,57 @@ if (ingestMesh) {
             }
 
             if (meshCategory) {
-                meshCategory.textContent = `Category: ${result.category || 'Unknown'}`;
+                const category = result.category || 'Unknown';
+                const parts = result.metadata?.identified_parts || result.extra?.identified_parts || [];
+                let categoryText = `Category: ${category}`;
+                if (parts && parts.length > 0) {
+                    categoryText += ` | Parts: ${parts.join(', ')}`;
+                }
+                meshCategory.textContent = categoryText;
             }
 
             if (meshParameters) {
                 let html = '';
-                if (result.final_parameters && result.final_parameters.length > 0) {
-                    html += '<div style="margin-bottom: 12px;"><strong>Semantic Parameters:</strong></div>';
-                    result.final_parameters.forEach(p => {
+                
+                // Show proposed semantic parameters (mapping from p1, p2, ... to semantic names)
+                const proposedParams = result.proposed_parameters || result.final_parameters || [];
+                if (proposedParams.length > 0) {
+                    html += '<div style="margin-bottom: 12px;"><strong>Proposed Semantic Parameters:</strong></div>';
+                    proposedParams.forEach(p => {
                         const units = p.units ? ` ${p.units}` : '';
                         const conf = p.confidence ? ` (conf: ${(p.confidence * 100).toFixed(0)}%)` : '';
-                        html += `<div style="margin: 4px 0; padding: 4px; background: #f8fafc; border-radius: 4px;">`;
-                        html += `<strong>${p.name}</strong>: ${p.value.toFixed(4)}${units}${conf}<br>`;
-                        html += `<span style="color: #64748b; font-size: 11px;">${p.description || ''}</span>`;
+                        const semanticName = p.semantic_name || p.name; // Support both new and old format
+                        const paramId = p.id || '?';
+                        html += `<div style="margin: 4px 0; padding: 6px; background: #f8fafc; border-radius: 4px; border-left: 3px solid #3b82f6;">`;
+                        html += `<div style="font-weight: 600;">${paramId} → <span style="color: #1e40af;">${semanticName}</span>: ${p.value.toFixed(4)}${units}${conf}</div>`;
+                        html += `<div style="color: #64748b; font-size: 11px; margin-top: 2px;">${p.description || p.proposed_description || ''}</div>`;
+                        if (p.raw_sources && p.raw_sources.length > 0) {
+                            html += `<div style="color: #94a3b8; font-size: 10px; margin-top: 2px;">Sources: ${p.raw_sources.join(', ')}</div>`;
+                        }
                         html += `</div>`;
                     });
                 } else {
-                    html += '<div style="color: #64748b;">No semantic parameters extracted.</div>';
+                    html += '<div style="color: #64748b;">No semantic parameters proposed.</div>';
                 }
 
+                // Show raw parameters (p1, p2, p3, ...)
                 if (result.raw_parameters && result.raw_parameters.length > 0) {
-                    html += '<div style="margin-top: 12px; margin-bottom: 8px;"><strong>Raw Parameters (first 10):</strong></div>';
+                    html += '<div style="margin-top: 16px; margin-bottom: 8px; padding-top: 12px; border-top: 1px solid #e2e8f0;"><strong>Raw Geometric Parameters (first 10):</strong></div>';
                     result.raw_parameters.slice(0, 10).forEach(p => {
                         const units = p.units ? ` ${p.units}` : '';
-                        html += `<div style="margin: 2px 0; font-size: 11px; color: #64748b;">`;
-                        html += `${p.id}: ${p.value.toFixed(4)}${units}`;
+                        html += `<div style="margin: 3px 0; padding: 4px; background: #f1f5f9; border-radius: 3px; font-size: 11px;">`;
+                        html += `<span style="font-weight: 600; color: #475569;">${p.id}</span>: ${p.value.toFixed(4)}${units}`;
+                        if (p.description) {
+                            html += `<div style="color: #64748b; font-size: 10px; margin-top: 2px;">${p.description}</div>`;
+                        }
+                        if (p.part_labels && p.part_labels.length > 0) {
+                            html += `<div style="color: #94a3b8; font-size: 10px;">Parts: ${p.part_labels.join(', ')}</div>`;
+                        }
                         html += `</div>`;
                     });
+                    if (result.raw_parameters.length > 10) {
+                        html += `<div style="color: #64748b; font-size: 11px; margin-top: 4px;">... and ${result.raw_parameters.length - 10} more raw parameters</div>`;
+                    }
                 }
 
                 meshParameters.innerHTML = html;
@@ -1569,7 +1593,8 @@ if (ingestMesh) {
 
             // Log to console
             console.log('[mesh_ingest] Results:', result);
-            logLine(`Mesh analysis complete: ${result.category} with ${result.final_parameters?.length || 0} semantic parameters`, 'ok');
+            const paramCount = (result.proposed_parameters || result.final_parameters || []).length;
+            logLine(`Mesh analysis complete: ${result.category} with ${paramCount} proposed semantic parameters`, 'ok');
 
         } catch (e) {
             if (meshIngestStatus) {

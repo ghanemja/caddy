@@ -107,7 +107,7 @@ FINETUNED_MODEL_PATH = os.environ.get(
 OLLAMA_URL = os.environ.get(
     "OLLAMA_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 ).rstrip("/")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llava-llama3:latest")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llava:latest")  # Default to llava:latest (user has this)
 LLAVA_URL = os.environ.get("LLAVA_URL")  # optional
 
 # Global variable to hold the fine-tuned model and processor
@@ -1618,91 +1618,99 @@ def call_vlm(
     images_payload = _normalize(image_data_urls)
     err = None
     
-    # Try fine-tuned model first (load lazily if not already loaded)
-    if USE_FINETUNED_MODEL:
-        if _finetuned_model is None:
-            print("[vlm] Model not loaded yet, loading now (this will take 2-3 minutes)...")
-            load_finetuned_model()
-        
-        if _finetuned_model is not None and _finetuned_processor is not None:
-            try:
-                print("[vlm] Using fine-tuned model...")
-                import torch
-                from PIL import Image
-                import io
-                import base64
-                
-                # Prepare images
-                images = []
-                if images_payload:
-                    for img_b64 in images_payload:
-                        img_bytes = base64.b64decode(img_b64)
-                        img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-                        images.append(img)
-                
-                # Prepare the conversation format
-                system_prompt = VLM_CODEGEN_PROMPT if not expect_json else VLM_SYSTEM_PROMPT
-                
-                # Format as conversation (LLaVA OneVision format)
-                conversation = [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": system_prompt + "\n\n" + final_prompt}
-                        ]
-                    }
-                ]
-                
-                # Add images to the user message
-                if images:
-                    for img in images:
-                        conversation[0]["content"].insert(0, {"type": "image"})
-                
-                # Apply chat template and process
-                prompt_text = _finetuned_processor.apply_chat_template(
-                    conversation, 
-                    add_generation_prompt=True
+    # Try Ollama first (fastest, no download needed) if model exists
+    # Check if Ollama model exists before trying it
+    ollama_model_available = False
+    if OLLAMA_URL:
+        try:
+            r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
+            if r.status_code == 200:
+                models_data = r.json()
+                model_names = [m.get("name", "") for m in models_data.get("models", [])]
+                ollama_model_available = OLLAMA_MODEL in model_names
+        except:
+            pass
+    
+    # Try fine-tuned model first if it's loaded
+    if _finetuned_model is not None and _finetuned_processor is not None:
+        try:
+            print("[vlm] Using fine-tuned model...")
+            import torch
+            from PIL import Image
+            import io
+            import base64
+            
+            # Prepare images
+            images = []
+            if images_payload:
+                for img_b64 in images_payload:
+                    img_bytes = base64.b64decode(img_b64)
+                    img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+                    images.append(img)
+            
+            # Prepare the conversation format
+            system_prompt = VLM_CODEGEN_PROMPT if not expect_json else VLM_SYSTEM_PROMPT
+            
+            # Format as conversation (LLaVA OneVision format)
+            conversation = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": system_prompt + "\n\n" + final_prompt}
+                    ]
+                }
+            ]
+            
+            # Add images to the user message
+            if images:
+                for img in images:
+                    conversation[0]["content"].insert(0, {"type": "image"})
+            
+            # Apply chat template and process
+            prompt_text = _finetuned_processor.apply_chat_template(
+                conversation, 
+                add_generation_prompt=True
+            )
+            
+            # Process inputs
+            inputs = _finetuned_processor(
+                images=images if images else None,
+                text=prompt_text,
+                return_tensors="pt"
+            )
+            
+            # Move to same device as model
+            device = next(_finetuned_model.parameters()).device
+            inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
+                     for k, v in inputs.items()}
+            
+            print(f"[vlm] Generating response...")
+            
+            # Generate
+            # For code generation, use more tokens and very low temperature for faithful copying
+            max_tokens = 6144 if not expect_json else 1024  # Code needs lots of tokens for 200+ lines
+            temp = 0.01 if not expect_json else 0.1  # Very low temp for precise copying
+            
+            with torch.no_grad():
+                output_ids = _finetuned_model.generate(
+                    **inputs,
+                    max_new_tokens=max_tokens,
+                    temperature=temp,
+                    top_p=0.98,
+                    do_sample=True if temp > 0 else False,
+                    repetition_penalty=1.1,  # Prevent getting stuck in loops
                 )
                 
-                # Process inputs
-                inputs = _finetuned_processor(
-                    images=images if images else None,
-                    text=prompt_text,
-                    return_tensors="pt"
-                )
-                
-                # Move to same device as model
-                device = next(_finetuned_model.parameters()).device
-                inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
-                         for k, v in inputs.items()}
-                
-                print(f"[vlm] Generating response...")
-                
-                # Generate
-                # For code generation, use more tokens and very low temperature for faithful copying
-                max_tokens = 6144 if not expect_json else 1024  # Code needs lots of tokens for 200+ lines
-                temp = 0.01 if not expect_json else 0.1  # Very low temp for precise copying
-                
-                with torch.no_grad():
-                    output_ids = _finetuned_model.generate(
-                        **inputs,
-                        max_new_tokens=max_tokens,
-                        temperature=temp,
-                        top_p=0.98,
-                        do_sample=True if temp > 0 else False,
-                        repetition_penalty=1.1,  # Prevent getting stuck in loops
-                    )
-                    
-                print(f"[vlm] Generated with max_tokens={max_tokens}, temp={temp}")
-                
-                # Decode response
-                generated_ids = output_ids[0][inputs['input_ids'].shape[1]:]
-                response = _finetuned_processor.decode(generated_ids, skip_special_tokens=True)
-                
-                print(f"[vlm] ✓ Got response from fine-tuned model: {len(response)} chars")
-                return {"provider": "finetuned", "raw": response}
-                
-            except Exception as e:
+            print(f"[vlm] Generated with max_tokens={max_tokens}, temp={temp}")
+            
+            # Decode response
+            generated_ids = output_ids[0][inputs['input_ids'].shape[1]:]
+            response = _finetuned_processor.decode(generated_ids, skip_special_tokens=True)
+            
+            print(f"[vlm] ✓ Got response from fine-tuned model: {len(response)} chars")
+            return {"provider": "finetuned", "raw": response}
+            
+        except Exception as e:
                 err = f"Fine-tuned model error: {e}"
                 print(f"[vlm] ✗ Fine-tuned model failed: {err}")
                 import traceback
@@ -1802,11 +1810,100 @@ def call_vlm(
         except Exception as e:
             err = f"Ollama error: {e}"
             print(f"[vlm] ✗ Unexpected error: {err}")
-
+        # If Ollama fails, continue to try other options
+    
+    # Try fine-tuned model if Ollama not available, model doesn't exist, or failed
+    # Load fine-tuned model if not already loaded and Ollama model doesn't exist
+    if USE_FINETUNED_MODEL:
+        if _finetuned_model is None and not ollama_model_available:
+            print("[vlm] Loading fine-tuned model (Ollama model not available)...")
+            load_finetuned_model()
+        
+        if _finetuned_model is not None and _finetuned_processor is not None:
+            try:
+                print("[vlm] Using fine-tuned model...")
+                import torch
+                from PIL import Image
+                import io
+                import base64
+                
+                # Prepare images
+                images = []
+                if images_payload:
+                    for img_b64 in images_payload:
+                        img_bytes = base64.b64decode(img_b64)
+                        img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+                        images.append(img)
+                
+                # Prepare the conversation format
+                system_prompt = VLM_CODEGEN_PROMPT if not expect_json else VLM_SYSTEM_PROMPT
+                
+                # Format as conversation (LLaVA OneVision format)
+                conversation = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": system_prompt + "\n\n" + final_prompt}
+                        ]
+                    }
+                ]
+                
+                # Add images to the user message
+                if images:
+                    for img in images:
+                        conversation[0]["content"].insert(0, {"type": "image"})
+                
+                # Apply chat template and process
+                prompt_text = _finetuned_processor.apply_chat_template(
+                    conversation, 
+                    add_generation_prompt=True
+                )
+                
+                # Process inputs
+                inputs = _finetuned_processor(
+                    images=images if images else None,
+                    text=prompt_text,
+                    return_tensors="pt"
+                )
+                
+                # Move to same device as model
+                device = next(_finetuned_model.parameters()).device
+                inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
+                         for k, v in inputs.items()}
+                
+                print(f"[vlm] Generating response...")
+                
+                # Generate
+                max_tokens = 6144 if not expect_json else 1024
+                temp = 0.01 if not expect_json else 0.1
+                
+                with torch.no_grad():
+                    output_ids = _finetuned_model.generate(
+                        **inputs,
+                        max_new_tokens=max_tokens,
+                        temperature=temp,
+                        top_p=0.98,
+                        do_sample=True if temp > 0 else False,
+                        repetition_penalty=1.1,
+                    )
+                
+                # Decode response
+                generated_ids = output_ids[0][inputs['input_ids'].shape[1]:]
+                response = _finetuned_processor.decode(generated_ids, skip_special_tokens=True)
+                
+                print(f"[vlm] ✓ Got response from fine-tuned model: {len(response)} chars")
+                return {"provider": "finetuned", "raw": response}
+                
+            except Exception as e:
+                err = f"Fine-tuned model error: {e}"
+                print(f"[vlm] ✗ Fine-tuned model failed: {err}")
+                import traceback
+                traceback.print_exc()
+    
+    # Fallback: Try LLAVA_URL if configured
     if LLAVA_URL:
         try:
             payload = {
-                # LLAVA_URL may not support system; bake it into the prompt if needed
                 "prompt": (
                     (VLM_CODEGEN_PROMPT + "\n\n" + final_prompt)
                     if not expect_json
@@ -2909,14 +3006,36 @@ def ingest_mesh():
         )
         
         # Initialize VLM client
-        try:
-            vlm = FinetunedVLMClient()
-            print("[ingest_mesh] Using fine-tuned VLM")
-        except Exception as e:
-            print(f"[ingest_mesh] Warning: Could not use fine-tuned VLM: {e}")
-            from vlm_cad.semantics.vlm_client import DummyVLMClient
-            vlm = DummyVLMClient()
-            print("[ingest_mesh] Using dummy VLM (for testing)")
+        # Prefer Ollama if available, otherwise use fine-tuned model
+        vlm = None
+        
+        # Check if Ollama is available
+        ollama_available = False
+        if OLLAMA_URL:
+            try:
+                import requests
+                r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
+                ollama_available = (r.status_code == 200)
+            except:
+                pass
+        
+        if ollama_available:
+            try:
+                from vlm_cad.semantics.vlm_client_ollama import OllamaVLMClient
+                vlm = OllamaVLMClient()
+                print("[ingest_mesh] Using Ollama VLM")
+            except Exception as e:
+                print(f"[ingest_mesh] Warning: Could not use Ollama: {e}")
+        
+        if vlm is None:
+            try:
+                vlm = FinetunedVLMClient()
+                print("[ingest_mesh] Using fine-tuned VLM")
+            except Exception as e2:
+                print(f"[ingest_mesh] Warning: Could not use fine-tuned VLM: {e2}")
+                from vlm_cad.semantics.vlm_client import DummyVLMClient
+                vlm = DummyVLMClient()
+                print("[ingest_mesh] Using dummy VLM (for testing)")
         
         # Run ingestion pipeline
         render_dir = os.path.join(temp_dir, "renders")
@@ -2932,29 +3051,36 @@ def ingest_mesh():
         )
         
         # Convert result to JSON-serializable format
+        def param_to_dict(p):
+            """Convert FinalParameter to dict with backward compatibility."""
+            d = {
+                "id": p.id,
+                "semantic_name": p.semantic_name,
+                "value": p.value,
+                "units": p.units,
+                "description": p.description,
+                "confidence": p.confidence,
+                "raw_sources": p.raw_sources,
+            }
+            # Backward compatibility: also include "name"
+            d["name"] = p.semantic_name
+            return d
+        
         response_data = {
             "ok": True,
             "category": result.category,
-            "final_parameters": [
-                {
-                    "name": p.name,
-                    "value": p.value,
-                    "units": p.units,
-                    "description": p.description,
-                    "confidence": p.confidence,
-                    "raw_sources": p.raw_sources,
-                }
-                for p in result.final_parameters
-            ],
             "raw_parameters": [
                 {
                     "id": p.id,
                     "value": p.value,
                     "units": p.units,
                     "description": p.description,
+                    "part_labels": p.part_labels or [],
                 }
                 for p in result.raw_parameters[:20]  # Limit to first 20 for response size
             ],
+            "proposed_parameters": [param_to_dict(p) for p in result.proposed_parameters],
+            "final_parameters": [param_to_dict(p) for p in result.proposed_parameters],  # Backward compat
             "metadata": {
                 "num_points": result.extra.get("num_points", 0),
                 "num_parts": result.extra.get("num_parts", 0),
@@ -3855,15 +3981,60 @@ def _warm_build():
 if __name__ == "__main__":
     os.makedirs(ASSETS_DIR, exist_ok=True)
     
-    # Don't load model on startup - load it lazily on first use
-    # This makes the server start in seconds instead of minutes
-    if USE_FINETUNED_MODEL:
-        print(f"[startup] Fine-tuned VLM model will load on first request (lazy loading)")
+    # VLM setup - prefer Ollama if available, otherwise fine-tuned model
+    # Check if Ollama is available and has the requested model
+    ollama_available = False
+    ollama_model_exists = False
+    if OLLAMA_URL:
+        try:
+            import requests
+            r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
+            if r.status_code == 200:
+                ollama_available = True
+                # Check if the requested model exists
+                models_data = r.json()
+                model_names = [m.get("name", "") for m in models_data.get("models", [])]
+                ollama_model_exists = OLLAMA_MODEL in model_names
+                if ollama_model_exists:
+                    print(f"[startup] ✓ Ollama is available (URL: {OLLAMA_URL}, Model: {OLLAMA_MODEL})")
+                else:
+                    print(f"[startup] ⚠ Ollama is available but model '{OLLAMA_MODEL}' not found")
+                    print(f"[startup] Available models: {', '.join(model_names)}")
+                    print(f"[startup] Will use fine-tuned model instead")
+            else:
+                print(f"[startup] ⚠ Ollama URL responded with {r.status_code}")
+        except Exception as e:
+            print(f"[startup] ⚠ Ollama not available: {e}")
+            print("[startup] Make sure Ollama is running: ollama serve")
+    
+    # Only use Ollama if it's available AND has the requested model
+    # Otherwise, fall back to fine-tuned model
+    if not (ollama_available and ollama_model_exists) and USE_FINETUNED_MODEL:
+        print(f"[startup] Preloading fine-tuned VLM model...")
         print(f"[startup] Model path: {FINETUNED_MODEL_PATH}")
         print(f"[startup] Model path exists: {os.path.exists(FINETUNED_MODEL_PATH)}")
-        print("[startup] This makes server start fast - first VLM request will take 2-3 min")
+        print("[startup] This may take 2-3 minutes on first run (downloading base model)...")
+        try:
+            load_finetuned_model()
+            if _finetuned_model is not None:
+                print("[startup] ✓ VLM model preloaded and ready")
+            else:
+                print("[startup] ⚠ VLM model not loaded (will load on first use)")
+        except Exception as e:
+            print(f"[startup] ⚠ Could not preload VLM model: {e}")
+            print("[startup] Model will be loaded on first use")
+    elif ollama_available and ollama_model_exists:
+        print(f"[startup] ✓ Using Ollama VLM (Model: {OLLAMA_MODEL})")
+        if USE_FINETUNED_MODEL and os.path.exists(FINETUNED_MODEL_PATH):
+            print(f"[startup] Fine-tuned model available at {FINETUNED_MODEL_PATH} but using Ollama")
     else:
-        print("[startup] Using Ollama/LLAVA for VLM")
+        if ollama_available and not ollama_model_exists:
+            print(f"[startup] ⚠ Ollama available but model '{OLLAMA_MODEL}' not found")
+            print(f"[startup] To use Ollama: ollama pull {OLLAMA_MODEL}")
+            if USE_FINETUNED_MODEL and os.path.exists(FINETUNED_MODEL_PATH):
+                print(f"[startup] Will use fine-tuned model instead (lazy load on first use)")
+        else:
+            print("[startup] ⚠ No VLM configured - VLM features will not work")
     
     threading.Thread(target=_warm_build, daemon=True).start()
     app.run(host="0.0.0.0", port=PORT, debug=False)
