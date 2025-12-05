@@ -319,3 +319,64 @@ def ingest_mesh_to_semantic_params(
     
     return result
 
+
+def build_deformer_from_ingest_result(
+    ingest_result: IngestResult,
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    part_labels: np.ndarray,
+    part_label_names: Dict[int, str],
+) -> "ParametricMeshDeformer":
+    """
+    Build a ParametricMeshDeformer from an IngestResult.
+    
+    Given:
+      - ingest_result: has category, final/proposed parameters with semantic names and baseline values
+      - vertices, faces: mesh geometry
+      - part_labels: per-vertex integer labels
+      - part_label_names: mapping part_id -> name
+    
+    Build a ParametricMeshDeformer that:
+      - uses the baseline semantic parameters from ingest_result
+      - uses a default deformation config per category
+    
+    Args:
+        ingest_result: result from ingest_mesh_to_semantic_params
+        vertices: mesh vertices [N, 3]
+        faces: mesh faces [M, 3]
+        part_labels: per-vertex part labels [N]
+        part_label_names: mapping from part ID -> name
+        
+    Returns:
+        ParametricMeshDeformer instance
+    """
+    from ..mesh_deform.deformer import (
+        MeshData,
+        ParametricMeshDeformer,
+        build_default_deformation_config_for_category,
+    )
+    
+    # Extract baseline parameters from ingest result
+    base_params = {
+        fp.semantic_name: fp.value
+        for fp in ingest_result.proposed_parameters
+    }
+    
+    # Build default deformation config for the category
+    config = build_default_deformation_config_for_category(
+        ingest_result.category,
+        part_label_names,
+    )
+    
+    # Create mesh data
+    mesh_data = MeshData(vertices=vertices, faces=faces)
+    
+    # Create and return deformer
+    return ParametricMeshDeformer(
+        base_mesh=mesh_data,
+        base_parameters=base_params,
+        part_labels=part_labels,
+        part_label_names=part_label_names,
+        config=config,
+    )
+

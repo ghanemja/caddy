@@ -37,24 +37,46 @@ class PointNetSetAbstraction(nn.Module):
             new_xyz: sampled points position data, [B, S, 3]
             new_points_concat: sample points feature data, [B, S, D']
         """
-        xyz = xyz.permute(0, 2, 1)
+        xyz = xyz.permute(0, 2, 1)  # [B, N, 3] -> [B, 3, N]
         if points is not None:
-            points = points.permute(0, 2, 1)
+            points = points.permute(0, 2, 1)  # [B, N, C] -> [B, C, N]
 
         if self.group_all:
-            new_xyz = xyz
-            new_points = torch.cat([xyz, points], dim=1) if points is not None else xyz
+            # For group_all, we aggregate all points into a single point
+            # new_xyz should be the centroid (mean) of all points: [B, 3, 1]
+            new_xyz = torch.mean(xyz, dim=2, keepdim=True)  # [B, 3, N] -> [B, 3, 1]
+            
+            if points is not None:
+                # Concatenate along channel dimension: [B, 3, N] + [B, C, N] -> [B, 3+C, N]
+                # Both tensors must have same N (number of points)
+                if xyz.shape[2] != points.shape[2]:
+                    # If N doesn't match, this is an error - but try to handle gracefully
+                    raise ValueError(
+                        f"Size mismatch in SetAbstraction: xyz has {xyz.shape[2]} points, "
+                        f"but points has {points.shape[2]} points. Shapes: xyz={xyz.shape}, points={points.shape}"
+                    )
+                new_points = torch.cat([xyz, points], dim=1)  # [B, 3+C, N]
+            else:
+                new_points = xyz
+            
+            # For group_all, we need to reshape to 4D for Conv2d: [B, C, N] -> [B, C, 1, N]
+            # This treats all N points as a single group with 1 neighbor each
+            new_points = new_points.unsqueeze(2)  # [B, 3+C, N] -> [B, 3+C, 1, N]
         else:
             new_xyz = index_points(xyz, farthest_point_sample(xyz, self.npoint))
             new_points = sample_and_group(self.radius, self.nsample, xyz, points, new_xyz)
         
-        # MLP
+        # MLP (expects 4D input [B, C, K, S] where K is number of neighbors, S is number of sampled points)
         for i, conv in enumerate(self.mlp_convs):
             bn = self.mlp_bns[i]
             new_points = F.relu(bn(conv(new_points)))
         
-        new_points = torch.max(new_points, 2)[0]
-        new_xyz = new_xyz.permute(0, 2, 1)
+        # Max pooling over the K dimension (neighbors)
+        new_points = torch.max(new_points, 2)[0]  # [B, C, K, S] -> [B, C, S] or [B, C, 1, N] -> [B, C, N]
+        
+        # For group_all, new_xyz is already [B, 3, 1], so we need to permute to [B, 1, 3]
+        # For non-group_all, new_xyz needs to be permuted from [B, 3, S] to [B, S, 3]
+        new_xyz = new_xyz.permute(0, 2, 1)  # [B, 3, S] -> [B, S, 3] or [B, 3, 1] -> [B, 1, 3]
         return new_xyz, new_points
 
 
@@ -303,14 +325,17 @@ class PointNet2PartSeg(nn.Module):
         else:
             l0_points = xyz
             l0_xyz = xyz
-        l0_xyz = l0_xyz.permute(0, 2, 1)
-        l0_points = l0_points.permute(0, 2, 1)
+        l0_xyz = l0_xyz.permute(0, 2, 1)  # [B, N, 3] -> [B, 3, N]
+        l0_points = l0_points.permute(0, 2, 1)  # [B, N, C] -> [B, C, N]
 
         l1_xyz, l1_points = self.sa1(l0_xyz, l0_points)  # l1_xyz: [B, 3, 512], l1_points: [B, 320, 512]
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)  # l2_xyz: [B, 3, 128], l2_points: [B, 512, 128]
-        # sa3 expects: xyz [B, 3, 128], points [B, 512, 128]
+        # sa3 expects: xyz [B, N, 3], points [B, N, C] (will permute internally)
+        # But sa2 returns [B, C, N], so we need to permute before passing to sa3
+        l2_xyz_for_sa3 = l2_xyz.permute(0, 2, 1)  # [B, 3, 128] -> [B, 128, 3]
+        l2_points_for_sa3 = l2_points.permute(0, 2, 1)  # [B, 512, 128] -> [B, 128, 512]
         # sa3 output: xyz [B, 3, 1], points [B, 1024, 1] (after group_all)
-        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
+        l3_xyz, l3_points = self.sa3(l2_xyz_for_sa3, l2_points_for_sa3)
 
         # Feature Propagation layers
         l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points)  # [B, 256, 128]

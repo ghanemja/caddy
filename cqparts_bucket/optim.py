@@ -1619,8 +1619,7 @@ def call_vlm(
     images_payload = _normalize(image_data_urls)
     err = None
     
-    # Try Ollama first (fastest, no download needed) if model exists
-    # Check if Ollama model exists before trying it
+    # Check if Ollama model exists (for fallback)
     ollama_model_available = False
     if OLLAMA_URL:
         try:
@@ -1632,7 +1631,14 @@ def call_vlm(
         except:
             pass
     
-    # Try fine-tuned model first if it's loaded
+    # Try fine-tuned model first (user's pretrained model)
+    # Load it if not already loaded
+    if USE_FINETUNED_MODEL:
+        if _finetuned_model is None or _finetuned_processor is None:
+            print("[vlm] Loading fine-tuned model (pretrained)...")
+            load_finetuned_model()
+    
+    # Use fine-tuned model if it's loaded
     if _finetuned_model is not None and _finetuned_processor is not None:
         try:
             print("[vlm] Using fine-tuned model...")
@@ -1813,14 +1819,9 @@ def call_vlm(
             print(f"[vlm] ✗ Unexpected error: {err}")
         # If Ollama fails, continue to try other options
     
-    # Try fine-tuned model if Ollama not available, model doesn't exist, or failed
-    # Load fine-tuned model if not already loaded and Ollama model doesn't exist
-    if USE_FINETUNED_MODEL:
-        if _finetuned_model is None and not ollama_model_available:
-            print("[vlm] Loading fine-tuned model (Ollama model not available)...")
-            load_finetuned_model()
-        
-        if _finetuned_model is not None and _finetuned_processor is not None:
+    # Fine-tuned model should have been tried first above
+    # This section is now just for error handling / fallback
+    # (The fine-tuned model attempt is already done at the top of the function)
             try:
                 print("[vlm] Using fine-tuned model...")
                 import torch
@@ -3007,33 +3008,35 @@ def ingest_mesh():
         )
         
         # Initialize VLM client
-        # Prefer Ollama if available, otherwise use fine-tuned model
+        # Prefer fine-tuned model first, then fall back to Ollama if needed
         vlm = None
         
-        # Check if Ollama is available
-        ollama_available = False
-        if OLLAMA_URL:
-            try:
-                import requests
-                r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
-                ollama_available = (r.status_code == 200)
-            except:
-                pass
-        
-        if ollama_available:
-            try:
-                from vlm_cad.semantics.vlm_client_ollama import OllamaVLMClient
-                vlm = OllamaVLMClient()
-                print("[ingest_mesh] Using Ollama VLM")
-            except Exception as e:
-                print(f"[ingest_mesh] Warning: Could not use Ollama: {e}")
-        
-        if vlm is None:
-            try:
-                vlm = FinetunedVLMClient()
-                print("[ingest_mesh] Using fine-tuned VLM")
-            except Exception as e2:
-                print(f"[ingest_mesh] Warning: Could not use fine-tuned VLM: {e2}")
+        # Try fine-tuned model first (user's pretrained model)
+        try:
+            vlm = FinetunedVLMClient()
+            print("[ingest_mesh] Using fine-tuned VLM (pretrained model)")
+        except Exception as e:
+            print(f"[ingest_mesh] Warning: Could not use fine-tuned VLM: {e}")
+            # Fall back to Ollama if fine-tuned model is not available
+            ollama_available = False
+            if OLLAMA_URL:
+                try:
+                    import requests
+                    r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
+                    ollama_available = (r.status_code == 200)
+                except:
+                    pass
+            
+            if ollama_available:
+                try:
+                    from vlm_cad.semantics.vlm_client_ollama import OllamaVLMClient
+                    vlm = OllamaVLMClient()
+                    print("[ingest_mesh] Using Ollama VLM (fallback)")
+                except Exception as e2:
+                    print(f"[ingest_mesh] Warning: Could not use Ollama: {e2}")
+            
+            # Final fallback to dummy
+            if vlm is None:
                 from vlm_cad.semantics.vlm_client import DummyVLMClient
                 vlm = DummyVLMClient()
                 print("[ingest_mesh] Using dummy VLM (for testing)")
@@ -3741,7 +3744,7 @@ def _reload_rover_from_generated():
     if not os.path.exists(gen_path):
         print("[reload] No generated code found, using original Rover")
         return Rover
-    
+
     try:
         print(f"[reload] Loading Rover from {gen_path}...")
         import importlib.util
