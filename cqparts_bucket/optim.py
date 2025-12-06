@@ -1691,22 +1691,63 @@ def call_vlm(
             inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
                      for k, v in inputs.items()}
             
-            print(f"[vlm] Generating response...")
-            
-            # Generate
             # For code generation, use more tokens and very low temperature for faithful copying
-            max_tokens = 6144 if not expect_json else 1024  # Code needs lots of tokens for 200+ lines
+            # Reduce max_tokens on CPU for faster generation
+            if device == "cpu":
+                max_tokens = 2048 if not expect_json else 512  # Reduced for CPU speed
+                print(f"[vlm]   ⚠ CPU detected: Reduced max_tokens to {max_tokens} for faster generation")
+            else:
+                max_tokens = 6144 if not expect_json else 1024  # Full tokens on GPU
             temp = 0.01 if not expect_json else 0.1  # Very low temp for precise copying
             
-            with torch.no_grad():
-                output_ids = _finetuned_model.generate(
-                    **inputs,
-                    max_new_tokens=max_tokens,
-                    temperature=temp,
-                    top_p=0.98,
-                    do_sample=True if temp > 0 else False,
-                    repetition_penalty=1.1,  # Prevent getting stuck in loops
-                )
+            print(f"[vlm] Generating response...")
+            print(f"[vlm]   Max tokens: {max_tokens}, Temperature: {temp}")
+            print(f"[vlm]   Input shape: {inputs['input_ids'].shape if 'input_ids' in inputs else 'N/A'}")
+            print(f"[vlm]   Device: {device}")
+            print(f"[vlm]   Starting generation (this may take 30-120 seconds on CPU)...")
+            
+            import time
+            import threading
+            
+            start_time = time.time()
+            generation_done = threading.Event()
+            
+            # Progress monitor thread
+            def progress_monitor():
+                """Print periodic status updates during generation."""
+                check_interval = 10  # Check every 10 seconds
+                warning_threshold = 120  # Warn if taking longer than 2 minutes
+                while not generation_done.is_set():
+                    elapsed = time.time() - start_time
+                    if elapsed < warning_threshold:
+                        time.sleep(check_interval)
+                        if not generation_done.is_set():
+                            print(f"[vlm]   Still generating... ({elapsed:.0f}s elapsed)", flush=True)
+                    else:
+                        # After warning threshold, check more frequently
+                        time.sleep(5)
+                        if not generation_done.is_set():
+                            elapsed = time.time() - start_time
+                            print(f"[vlm]   ⚠ Still generating after {elapsed:.0f}s (may take 2-5 minutes on CPU)...", flush=True)
+            
+            monitor_thread = threading.Thread(target=progress_monitor, daemon=True)
+            monitor_thread.start()
+            
+            try:
+                with torch.no_grad():
+                    output_ids = _finetuned_model.generate(
+                        **inputs,
+                        max_new_tokens=max_tokens,
+                        temperature=temp,
+                        top_p=0.98,
+                        do_sample=True if temp > 0 else False,
+                        repetition_penalty=1.1,  # Prevent getting stuck in loops
+                    )
+            finally:
+                generation_done.set()  # Signal that generation is complete
+            
+            elapsed = time.time() - start_time
+            print(f"[vlm]   ✓ Generation completed in {elapsed:.1f} seconds", flush=True)
                 
             print(f"[vlm] Generated with max_tokens={max_tokens}, temp={temp}")
             
@@ -1873,21 +1914,66 @@ def call_vlm(
                 inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
                          for k, v in inputs.items()}
                 
-                print(f"[vlm] Generating response...")
-                
                 # Generate
-                max_tokens = 6144 if not expect_json else 1024
+                # Reduce max_tokens on CPU for faster generation
+                if device == "cpu":
+                    max_tokens = 2048 if not expect_json else 512  # Reduced for CPU speed
+                    print(f"[vlm]   ⚠ CPU detected: Reduced max_tokens to {max_tokens} for faster generation")
+                else:
+                    max_tokens = 6144 if not expect_json else 1024  # Full tokens on GPU
                 temp = 0.01 if not expect_json else 0.1
                 
-                with torch.no_grad():
-                    output_ids = _finetuned_model.generate(
-                        **inputs,
-                        max_new_tokens=max_tokens,
-                        temperature=temp,
-                        top_p=0.98,
-                        do_sample=True if temp > 0 else False,
-                        repetition_penalty=1.1,
-                    )
+                print(f"[vlm] Generating response...")
+                print(f"[vlm]   Max tokens: {max_tokens}, Temperature: {temp}")
+                print(f"[vlm]   Input shape: {inputs['input_ids'].shape if 'input_ids' in inputs else 'N/A'}")
+                print(f"[vlm]   Device: {device}")
+                print(f"[vlm]   Starting generation (this may take 30-120 seconds on CPU)...")
+                
+                import time
+                import threading
+                
+                start_time = time.time()
+                generation_done = threading.Event()
+                
+                # Progress monitor thread
+                def progress_monitor():
+                    """Print periodic status updates during generation."""
+                    check_interval = 10  # Check every 10 seconds
+                    warning_threshold = 120  # Warn if taking longer than 2 minutes
+                    while not generation_done.is_set():
+                        elapsed = time.time() - start_time
+                        if elapsed < warning_threshold:
+                            time.sleep(check_interval)
+                            if not generation_done.is_set():
+                                print(f"[vlm]   Still generating... ({elapsed:.0f}s elapsed)", flush=True)
+                        else:
+                            # After warning threshold, check more frequently
+                            time.sleep(5)
+                            if not generation_done.is_set():
+                                elapsed = time.time() - start_time
+                                print(f"[vlm]   ⚠ Still generating after {elapsed:.0f}s (may take 2-5 minutes on CPU)...", flush=True)
+                
+                monitor_thread = threading.Thread(target=progress_monitor, daemon=True)
+                monitor_thread.start()
+                
+                try:
+                    with torch.no_grad():
+                        output_ids = _finetuned_model.generate(
+                            **inputs,
+                            max_new_tokens=max_tokens,
+                            temperature=temp,
+                            top_p=0.98,
+                            do_sample=True if temp > 0 else False,
+                            repetition_penalty=1.1,
+                        )
+                finally:
+                    generation_done.set()  # Signal that generation is complete
+                
+                elapsed = time.time() - start_time
+                print(f"[vlm]   ✓ Generation completed in {elapsed:.1f} seconds", flush=True)
+                
+                elapsed = time.time() - start_time
+                print(f"[vlm]   Generation completed in {elapsed:.1f} seconds")
                 
                 # Decode response
                 generated_ids = output_ids[0][inputs['input_ids'].shape[1]:]
@@ -3008,16 +3094,14 @@ def ingest_mesh():
         )
         
         # Initialize VLM client
-        # Prefer fine-tuned model first, then fall back to Ollama if needed
+        # On CPU, prefer Ollama (much faster). On GPU, prefer fine-tuned model.
         vlm = None
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        # Try fine-tuned model first (user's pretrained model)
-        try:
-            vlm = FinetunedVLMClient()
-            print("[ingest_mesh] Using fine-tuned VLM (pretrained model)")
-        except Exception as e:
-            print(f"[ingest_mesh] Warning: Could not use fine-tuned VLM: {e}")
-            # Fall back to Ollama if fine-tuned model is not available
+        # On CPU, try Ollama first (much faster than fine-tuned model)
+        if device == "cpu":
+            print("[ingest_mesh] CPU detected - using Ollama for faster inference")
             ollama_available = False
             if OLLAMA_URL:
                 try:
@@ -3031,21 +3115,164 @@ def ingest_mesh():
                 try:
                     from vlm_cad.semantics.vlm_client_ollama import OllamaVLMClient
                     vlm = OllamaVLMClient()
-                    print("[ingest_mesh] Using Ollama VLM (fallback)")
-                except Exception as e2:
-                    print(f"[ingest_mesh] Warning: Could not use Ollama: {e2}")
+                    print("[ingest_mesh] Using Ollama VLM (fast on CPU)")
+                except Exception as e:
+                    print(f"[ingest_mesh] Warning: Could not use Ollama: {e}")
             
-            # Final fallback to dummy
+            # Fallback to fine-tuned model if Ollama not available
             if vlm is None:
-                from vlm_cad.semantics.vlm_client import DummyVLMClient
-                vlm = DummyVLMClient()
-                print("[ingest_mesh] Using dummy VLM (for testing)")
+                try:
+                    vlm = FinetunedVLMClient()
+                    print("[ingest_mesh] Using fine-tuned VLM (slower on CPU, may take 2-5 minutes)")
+                except Exception as e:
+                    print(f"[ingest_mesh] Warning: Could not use fine-tuned VLM: {e}")
+                    from vlm_cad.semantics.vlm_client import DummyVLMClient
+                    vlm = DummyVLMClient()
+                    print("[ingest_mesh] Using dummy VLM (for testing)")
+        else:
+            # On GPU, prefer fine-tuned model (fast and accurate)
+            try:
+                vlm = FinetunedVLMClient()
+                print("[ingest_mesh] Using fine-tuned VLM (pretrained model on GPU)")
+            except Exception as e:
+                print(f"[ingest_mesh] Warning: Could not use fine-tuned VLM: {e}")
+                # Fall back to Ollama
+                ollama_available = False
+                if OLLAMA_URL:
+                    try:
+                        import requests
+                        r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
+                        ollama_available = (r.status_code == 200)
+                    except:
+                        pass
+                
+                if ollama_available:
+                    try:
+                        from vlm_cad.semantics.vlm_client_ollama import OllamaVLMClient
+                        vlm = OllamaVLMClient()
+                        print("[ingest_mesh] Using Ollama VLM (fallback)")
+                    except Exception as e2:
+                        print(f"[ingest_mesh] Warning: Could not use Ollama: {e2}")
+                
+                if vlm is None:
+                    from vlm_cad.semantics.vlm_client import DummyVLMClient
+                    vlm = DummyVLMClient()
+                    print("[ingest_mesh] Using dummy VLM (for testing)")
         
         # Run ingestion pipeline
         render_dir = os.path.join(temp_dir, "renders")
         os.makedirs(render_dir, exist_ok=True)
         
-        print(f"[ingest_mesh] Running ingestion pipeline...")
+        # Step 1: Run PointNet++ segmentation FIRST (fast, ~1-5 seconds)
+        # This gives immediate feedback while VLM runs
+        print(f"[ingest_mesh] Running PointNet++ segmentation (fast, ~1-5 seconds)...")
+        from vlm_cad.pointnet_seg.inference import segment_mesh
+        from vlm_cad.pointnet_seg.labels import get_category_from_flat_label
+        from vlm_cad.pointnet_seg.geometry import compute_part_statistics, compute_part_bounding_boxes
+        import numpy as np
+        
+        seg_result = segment_mesh(
+            mesh_path,
+            model,
+            num_points=2048,
+            return_logits=False,
+        )
+        points = seg_result["points"]
+        labels = seg_result["labels"]
+        unique_labels = np.unique(labels)
+        
+        print(f"[ingest_mesh] ✓ PointNet++ segmentation complete!")
+        print(f"[ingest_mesh]   Segmented into {len(unique_labels)} parts")
+        print(f"[ingest_mesh]   Point cloud: {len(points)} points")
+        
+        # Build part statistics for visualization
+        part_stats = compute_part_statistics(points, labels)
+        part_bboxes = compute_part_bounding_boxes(points, labels)
+        
+        # Build part label names
+        part_label_names = {}
+        for label_id in unique_labels:
+            label_id_int = int(label_id)
+            result = get_category_from_flat_label(label_id_int)
+            if result:
+                cat, part_name = result
+                part_label_names[label_id_int] = part_name
+            else:
+                part_label_names[label_id_int] = f"part_{label_id_int}"
+        
+        # Create segmentation summary
+        segmentation_summary = {
+            "num_parts": len(unique_labels),
+            "num_points": len(points),
+            "parts": []
+        }
+        
+        for label_id in unique_labels:
+            label_id_int = int(label_id)
+            part_name = part_label_names.get(label_id_int, f"part_{label_id_int}")
+            count = np.sum(labels == label_id_int)
+            stats = part_stats.get(label_id_int, {})
+            bbox = part_bboxes.get(label_id_int, {})
+            
+            # Convert bbox to JSON-serializable format
+            bbox_data = None
+            if label_id_int in part_bboxes and bbox:
+                def to_list(v):
+                    if v is None:
+                        return [0.0, 0.0, 0.0]
+                    if hasattr(v, 'tolist'):
+                        return v.tolist()
+                    if isinstance(v, (list, tuple)):
+                        return [float(x) for x in v]
+                    return [float(v)] if not isinstance(v, (list, tuple)) else [float(x) for x in v]
+                
+                bbox_data = {
+                    "min": to_list(bbox.get("min")),
+                    "max": to_list(bbox.get("max")),
+                    "center": to_list(bbox.get("center")),
+                    "extent": to_list(bbox.get("extent")),
+                }
+            
+            segmentation_summary["parts"].append({
+                "id": int(label_id_int),
+                "name": part_name,
+                "point_count": int(count),
+                "percentage": float(count / len(points) * 100),
+                "bbox": bbox_data,
+            })
+        
+        # Print part details
+        print(f"[ingest_mesh] Part breakdown:")
+        for part in segmentation_summary["parts"]:
+            print(f"[ingest_mesh]   • Part {part['id']} ({part['name']}): {part['point_count']} points ({part['percentage']:.1f}%)")
+            if part.get("bbox"):
+                extent = part["bbox"]["extent"]
+                print(f"[ingest_mesh]     BBox: {extent[0]:.3f} x {extent[1]:.3f} x {extent[2]:.3f}")
+        
+        # Save colored point cloud visualization
+        try:
+            import trimesh
+            # Create a colored point cloud
+            colors = np.zeros((len(points), 3))
+            # Assign colors based on part labels (use hash-based colors for consistency)
+            for i, label_id in enumerate(labels):
+                # Simple hash-based color
+                np.random.seed(int(label_id))
+                color = np.random.rand(3)
+                colors[i] = color
+            
+            # Create point cloud
+            pc = trimesh.PointCloud(vertices=points, colors=colors)
+            viz_path = os.path.join(temp_dir, "segmentation_colored.ply")
+            pc.export(viz_path)
+            print(f"[ingest_mesh] ✓ Saved colored point cloud visualization: {viz_path}")
+            segmentation_summary["visualization_path"] = viz_path
+        except Exception as e:
+            print(f"[ingest_mesh] Warning: Could not save visualization: {e}")
+            segmentation_summary["visualization_path"] = None
+        
+        # Now run full ingestion pipeline (includes VLM calls)
+        print(f"[ingest_mesh] Running full ingestion pipeline (VLM calls may take 30s-5min)...")
         result = ingest_mesh_to_semantic_params(
             mesh_path=mesh_path,
             vlm=vlm,
@@ -3073,6 +3300,7 @@ def ingest_mesh():
         response_data = {
             "ok": True,
             "category": result.category,
+            "segmentation": segmentation_summary,  # PointNet++ segmentation results (available immediately)
             "raw_parameters": [
                 {
                     "id": p.id,
