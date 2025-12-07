@@ -49,9 +49,25 @@ body.right-collapsed #right {
   z-index: 10;
 }
 
-#left {
+#stepper {
   position: fixed;
   top: var(--bar);
+  left: 0;
+  right: 0;
+  height: 50px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  z-index: 9;
+  padding: 0 20px;
+}
+
+#left {
+  position: fixed;
+  top: calc(var(--bar) + 50px);
   left: 0;
   bottom: var(--console);
   width: var(--sidebar);
@@ -136,7 +152,7 @@ body.right-collapsed #right {
 
 #wrap {
   position: fixed;
-  top: var(--bar);
+  top: calc(var(--bar) + 50px);
   left: var(--sidebar);
   right: var(--right);
   bottom: var(--console);
@@ -150,7 +166,7 @@ body.right-collapsed #right {
 
 #right {
   position: fixed;
-  top: var(--bar);
+  top: calc(var(--bar) + 50px);
   right: 0;
   bottom: var(--console);
   width: var(--right);
@@ -385,4 +401,74 @@ body.right-collapsed #right {
   font-size: 12px;
   color: #94a3b8;
   margin-left: 2px;
+}
+
+/* Stepper styles */
+#stepper {
+  position: fixed;
+  top: var(--bar);
+  left: 0;
+  right: 0;
+  height: 50px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  z-index: 9;
+  padding: 0 20px;
+}
+
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+
+.step-item:hover {
+  background: #f1f5f9;
+}
+
+.step-number {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #94a3b8;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+
+.step-item.active .step-number {
+  background: #3b82f6;
+}
+
+.step-item.completed .step-number {
+  background: #10b981;
+}
+
+.step-item span {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+
+.step-item.active span {
+  color: #334155;
+}
+
+.step-connector {
+  width: 40px;
+  height: 2px;
+  background: #cbd5e1;
 }
