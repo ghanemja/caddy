@@ -283,20 +283,20 @@ def part_table_to_labeling_json(
         # Infer shape hint
         shape_hint = infer_shape_hint(part_info.extents)
         
-        # Build part entry
+        # Build part entry - convert all NumPy types to native Python types
         part_entry = {
-            "part_id": part_info.part_id,
+            "part_id": int(part_info.part_id),
             "provisional_name": f"part_{part_info.part_id}",
             "name": part_info.name,
             "description": part_info.description,
-            "centroid": part_info.centroid.tolist(),
-            "bbox_min": part_info.bbox_min.tolist(),
-            "bbox_max": part_info.bbox_max.tolist(),
-            "extents": part_info.extents.tolist(),
-            "touches_ground": part_info.touches_ground,
-            "shape_hint": shape_hint,
-            "approx_volume": part_info.approx_volume,
-            "approx_area": part_info.approx_area,
+            "centroid": [float(x) for x in part_info.centroid.tolist()],
+            "bbox_min": [float(x) for x in part_info.bbox_min.tolist()],
+            "bbox_max": [float(x) for x in part_info.bbox_max.tolist()],
+            "extents": [float(x) for x in part_info.extents.tolist()],
+            "touches_ground": bool(part_info.touches_ground),
+            "shape_hint": str(shape_hint),
+            "approx_volume": float(part_info.approx_volume) if part_info.approx_volume is not None else None,
+            "approx_area": float(part_info.approx_area) if part_info.approx_area is not None else None,
         }
         
         part_list.append(part_entry)

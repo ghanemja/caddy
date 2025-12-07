@@ -1,0 +1,24 @@
+<!-- History Modal -->
+<div id="historyModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 10000; overflow: auto;">
+  <div style="position: relative; max-width: 900px; margin: 40px auto; background: white; border-radius: 12px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); overflow: hidden;">
+    <!-- Header -->
+    <div style="padding: 20px 24px; background: #f3ebf7; border-bottom: 2px solid #5f476e; display: flex; justify-content: space-between; align-items: center;">
+      <h2 style="margin: 0; font-size: 20px; color: #5f476e; font-weight: 700;">Processing History</h2>
+      <div style="display: flex; gap: 8px;">
+        <button id="clearHistoryBtn" style="padding: 6px 12px; background: #fff; color: #5f476e; border: 1px solid #5f476e; border-radius: 6px; cursor: pointer; font-size: 12px;">Clear All</button>
+        <button id="closeHistoryModal" style="padding: 6px 12px; background: #5f476e; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;">Close</button>
+      </div>
+    </div>
+    
+    <!-- Content -->
+    <div style="padding: 24px; max-height: calc(100vh - 200px); overflow-y: auto;">
+      <div id="historyList" style="display: flex; flex-direction: column; gap: 16px;">
+        <!-- History items will be populated here -->
+        <div style="text-align: center; padding: 40px; color: #94a3b8; font-style: italic;">
+          No history yet. Complete a mesh processing run to see it here.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+

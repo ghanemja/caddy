@@ -1,8 +1,8 @@
 :root {
-  --bar: 54px;
-  --sidebar: 320px;
-  --right: 380px;
-  --console: 150px;
+  --bar: 3.375rem; /* 54px */
+  --sidebar: 23.9rem; /* ~382px - 85% of 450px */
+  --right: 23.9rem; /* ~382px - 85% of 450px */
+  --console: 9.375rem; /* 150px */
 }
 
 * {
@@ -18,21 +18,15 @@ body {
 
 /* Collapse whole panels by zeroing the CSS vars already used by layout */
 body.left-collapsed {
-  --sidebar: 0px;
+  --sidebar: 0;
 }
 
 body.right-collapsed {
-  --right: 0px;
+  --right: 0; /* Slightly less minimized - shows a small strip */
 }
 
-/* Optional: remove borders when hidden */
-body.left-collapsed #left {
-  border-right: none;
-}
 
-body.right-collapsed #right {
-  border-left: none;
-}
+/* Panel collapse functionality removed - panels are always visible */
 
 #bar {
   position: fixed;
@@ -46,7 +40,7 @@ body.right-collapsed #right {
   gap: 10px;
   padding: 8px 16px;
   border-bottom: 1px solid #5f476e;
-  background: #ebd2fa;
+  background: #f3ebf7;
   z-index: 10;
 }
 
@@ -69,7 +63,7 @@ body.right-collapsed #right {
 #logo-placeholder {
   width: 120px;
   height: 32px;
-  background: #ebd2fa;
+  background: #f3ebf7;
   border: 1px dashed #5f476e;
   border-radius: 6px;
   display: flex;
@@ -82,7 +76,7 @@ body.right-collapsed #right {
 
 .bar-button {
   padding: 6px 14px;
-  background: #ebd2fa;
+  background: #f3ebf7;
   color: #5f476e;
   border: 1px solid #5f476e;
   border-radius: 6px;
@@ -93,7 +87,7 @@ body.right-collapsed #right {
 }
 
 .bar-button:hover {
-  background: #ebd2fa;
+  background: #f3ebf7;
   border-color: #5f476e;
   color: #5f476e;
   transform: translateY(-1px);
@@ -111,7 +105,7 @@ body.right-collapsed #right {
   left: 0;
   right: 0;
   height: 50px;
-  background: #ebd2fa;
+  background: #f3ebf7;
   border-bottom: 1px solid #5f476e;
   display: flex;
   align-items: center;
@@ -123,37 +117,18 @@ body.right-collapsed #right {
 
 #left {
   position: fixed;
-  top: calc(var(--bar) + 50px);
+  top: calc(var(--bar) + 3.125rem); /* 50px */
   left: 0;
   bottom: var(--console);
   width: var(--sidebar);
+  min-width: 9.375rem; /* 150px */
   border-right: 1px solid #eee;
   background: #fafafa;
   overflow: auto;
+  word-wrap: break-word;
 }
 
-.resize-handle {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 4px;
-  cursor: col-resize;
-  z-index: 100;
-  background: transparent;
-  transition: background 0.2s;
-}
-
-.resize-handle:hover {
-  background: #5f476e;
-}
-
-#leftResizeHandle {
-  right: -2px;
-}
-
-#rightResizeHandle {
-  left: -2px;
-}
+/* Resize handles removed - functionality was buggy */
 
 #left h3,
 #right h3 {
@@ -161,7 +136,7 @@ body.right-collapsed #right {
   font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #666;
+  color: #5f476e;
 }
 
 #compList {
@@ -186,7 +161,7 @@ body.right-collapsed #right {
 
 #compList li.active {
   outline: 2px solid #5f476e;
-  background: #ebd2fa;
+  background: #f3ebf7;
 }
 
 .swatch {
@@ -208,7 +183,7 @@ body.right-collapsed #right {
 
 #wrap {
   position: fixed;
-  top: calc(var(--bar) + 50px);
+  top: calc(var(--bar) + 3.125rem); /* 50px */
   left: var(--sidebar);
   right: var(--right);
   bottom: var(--console);
@@ -222,27 +197,165 @@ body.right-collapsed #right {
 
 #right {
   position: fixed;
-  top: calc(var(--bar) + 50px);
+  top: calc(var(--bar) + 3.125rem); /* 50px */
   right: 0;
   bottom: var(--console);
   width: var(--right);
+  min-width: 9.375rem; /* 150px */
   border-left: 1px solid #5f476e;
   background: #fff;
   display: flex;
   flex-direction: column;
   overflow: auto;
   z-index: 5;
+  word-wrap: break-word;
+  padding: 0 12px; /* Add padding between content and edge */
+  box-sizing: border-box;
 }
 
 /* Ensure all sections in right panel stay within it */
 #right .section {
   position: relative;
   width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Explicitly ensure Components and Get Suggestions are in right panel ONLY */
+/* Hide ALL instances by default - very aggressive hiding */
+#sectionComponents,
+#recsSection {
+  display: none !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  left: -9999px !important;
+  top: -9999px !important;
+  z-index: -9999 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Hide from specific containers */
+#left #sectionComponents,
+#left #recsSection,
+#wrap #sectionComponents,
+#wrap #recsSection,
+#canvas #sectionComponents,
+#canvas #recsSection,
+body > #sectionComponents,
+body > #recsSection {
+  display: none !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  left: -9999px !important;
+  top: -9999px !important;
+  z-index: -9999 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Then, ONLY show them when they're inside #right */
+#right #sectionComponents,
+#right #recsSection {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  z-index: auto !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  right: auto !important;
+  bottom: auto !important;
+  pointer-events: auto !important;
+  height: auto !important;
+  overflow: visible !important;
+}
+
+/* Make sure section headers are visible */
+#right #sectionComponents header,
+#right #recsSection header {
+  display: flex !important;
+  visibility: visible !important;
+}
+
+/* Ensure the suggestFromImage button is only in the right panel */
+/* Hide ALL instances by default */
+#suggestFromImage {
+  display: none !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  left: -9999px !important;
+  top: -9999px !important;
+  z-index: -9999 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+#left #suggestFromImage,
+#wrap #suggestFromImage,
+#canvas #suggestFromImage,
+body > #suggestFromImage {
+  display: none !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  left: -9999px !important;
+  top: -9999px !important;
+  z-index: -9999 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Only show in right panel */
+#right #suggestFromImage {
+  display: block !important;
+  visibility: visible !important;
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  z-index: auto !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
 }
 
 .section {
   padding: 10px 12px;
   border-bottom: 1px solid #f0f0f0;
+  min-width: 0; /* Allow section to shrink below content size */
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* Right panel sections - parent has padding, so sections don't need extra horizontal padding */
+#right .section {
+  padding: 10px 0;
+}
+
+#right .section header {
+  padding: 0 0 8px 0;
+}
+
+#right .section-body {
+  padding: 0;
+}
+
+/* Ensure content within sections is responsive */
+.section-body {
+  min-width: 0;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.section-body * {
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .section header {
@@ -270,7 +383,7 @@ body.right-collapsed #right {
 }
 
 .section header .toggle:hover {
-  background: #ebd2fa;
+  background: #f3ebf7;
 }
 
 .section.collapsed .section-body {
@@ -313,7 +426,7 @@ body.right-collapsed #right {
 
 .row button:hover,
 .btn:hover {
-  background: #ebd2fa;
+  background: #f3ebf7;
 }
 
 .pill {
@@ -450,7 +563,7 @@ body.right-collapsed #right {
   font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #666;
+  color: #5f476e;
 }
 
 #recsList {
@@ -477,7 +590,7 @@ body.right-collapsed #right {
   left: 0;
   right: 0;
   height: 50px;
-  background: #ebd2fa;
+  background: #f3ebf7;
   border-bottom: 1px solid #5f476e;
   display: flex;
   align-items: center;
@@ -505,7 +618,7 @@ body.right-collapsed #right {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: #ebd2fa;
+  background: #f3ebf7;
   color: #5f476e;
   border: 2px solid #5f476e;
   display: flex;
@@ -522,7 +635,7 @@ body.right-collapsed #right {
 }
 
 .step-item.completed .step-number {
-  background: #ebd2fa;
+  background: #f3ebf7;
   color: #5f476e;
   border-color: #5f476e;
 }
@@ -552,14 +665,14 @@ body.right-collapsed #right {
   padding: 8px 12px;
   border: 2px dashed #5f476e;
   border-radius: 8px;
-  background: #ebd2fa;
+  background: #f3ebf7;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .file-input-wrapper:hover {
   border-color: #5f476e;
-  background: #ebd2fa;
+  background: #f3ebf7;
 }
 
 .file-input-button {
@@ -590,13 +703,13 @@ body.right-collapsed #right {
 
 .section[data-step].step-inactive {
   opacity: 0.5;
-  background: #ebd2fa;
+  background: #f3ebf7;
   pointer-events: none;
 }
 
 .section[data-step].step-active {
   opacity: 1;
-  background: #ebd2fa;
+  background: #f3ebf7;
 }
 
 .section[data-step].step-completed {

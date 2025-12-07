@@ -3132,13 +3132,17 @@ def ingest_mesh_segment():
             bbox_data = None
             if label_id_int in part_bboxes and bbox:
                 def to_list(v):
+                    """Convert NumPy arrays/scalars to native Python types."""
                     if v is None:
                         return [0.0, 0.0, 0.0]
                     if hasattr(v, 'tolist'):
-                        return v.tolist()
+                        # NumPy array - convert to list and ensure all values are native Python floats
+                        return [float(x) for x in v.tolist()]
                     if isinstance(v, (list, tuple)):
+                        # Already a list/tuple - ensure all values are native Python floats
                         return [float(x) for x in v]
-                    return [float(v)] if not isinstance(v, (list, tuple)) else [float(x) for x in v]
+                    # Single value - convert to float
+                    return [float(v)]
                 
                 bbox_data = {
                     "min": to_list(bbox.get("min")),
@@ -3222,6 +3226,63 @@ def ingest_mesh_segment():
             "ok": False,
             "error": str(e),
             "traceback": traceback.format_exc()
+        }), 500
+
+
+@app.post("/convert_mesh_to_glb")
+def convert_mesh_to_glb():
+    """
+    Convert uploaded mesh file (STL/PLY/OBJ) to GLB format for display in viewer.
+    """
+    try:
+        if 'mesh' not in request.files:
+            return jsonify({"ok": False, "error": "No mesh file provided"}), 400
+        
+        mesh_file = request.files['mesh']
+        if not mesh_file.filename:
+            return jsonify({"ok": False, "error": "Empty filename"}), 400
+        
+        import tempfile
+        import os
+        import trimesh
+        
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(mesh_file.filename)[1]) as tmp:
+            mesh_file.save(tmp.name)
+            mesh_path = tmp.name
+        
+        try:
+            # Load mesh
+            mesh = trimesh.load(mesh_path)
+            if isinstance(mesh, trimesh.Scene):
+                mesh = mesh.dump(concatenate=True)
+            
+            # Export as GLB
+            import io
+            glb_buffer = io.BytesIO()
+            mesh.export(file_obj=glb_buffer, file_type='glb')
+            glb_buffer.seek(0)
+            
+            from flask import send_file
+            return send_file(
+                glb_buffer,
+                mimetype='model/gltf-binary',
+                as_attachment=False,
+                download_name='mesh.glb'
+            )
+        finally:
+            # Clean up temp file
+            if os.path.exists(mesh_path):
+                os.unlink(mesh_path)
+                
+    except Exception as e:
+        import traceback
+        error_msg = f"Mesh conversion error: {str(e)}"
+        print(f"[convert_mesh_to_glb] {error_msg}", flush=True)
+        traceback.print_exc()
+        return jsonify({
+            "ok": False,
+            "error": str(e),
         }), 500
 
 

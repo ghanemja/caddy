@@ -336,25 +336,7 @@ const recsStatus = document.getElementById('recsStatus');
 const recsApplyAll = document.getElementById('recsApplyAll');
 const recsClear = document.getElementById('recsClear');
 
-// Panel toggle buttons (changed from checkboxes to buttons)
-const toggleLeftBtn = document.getElementById('toggleLeftPanel');
-const toggleRightBtn = document.getElementById('toggleRightPanel');
-
-if (toggleLeftBtn) {
-  toggleLeftBtn.onclick = () => {
-    const leftCollapsed = localStorage.getItem('panel:left') === '1';
-    setPanel('left', leftCollapsed);
-    toggleLeftBtn.textContent = leftCollapsed ? '◀ Left' : '▶ Left';
-  };
-}
-
-if (toggleRightBtn) {
-  toggleRightBtn.onclick = () => {
-    const rightCollapsed = localStorage.getItem('panel:right') === '1';
-    setPanel('right', rightCollapsed);
-    toggleRightBtn.textContent = rightCollapsed ? 'Right ▶' : '◀ Right';
-  };
-}
+// Panel collapse functionality removed - panels are always visible
 
 
 
@@ -1004,28 +986,28 @@ btn.addEventListener('click', async () => {
     fd.append('prompt', activePrompt.value || '');
   } else {
     // Step 1: Legacy mode - image required
-    if (!refEl.files[0]) { 
-      alert('Pick a reference image first.'); 
-      return; 
-    }
-    
-    fd.append('reference', refEl.files[0]);
-    
-    // Automatically capture current model snapshot from canvas
-    try {
-      const snapBlob = await snapshotCanvasToBlob();
-      if (snapBlob) {
-        fd.append('snapshot', new File([snapBlob], 'snapshot.png', { type: 'image/png' }));
-        logLine('Captured current model snapshot automatically');
-      }
-    } catch (e) {
-      console.warn('Failed to capture snapshot:', e);
-      logLine('Warning: Could not capture snapshot, continuing without it', 'warn');
-    }
-    
-    fd.append('prompt', activePrompt.value || '');
+  if (!refEl.files[0]) { 
+    alert('Pick a reference image first.'); 
+    return; 
   }
   
+  fd.append('reference', refEl.files[0]);
+  
+  // Automatically capture current model snapshot from canvas
+  try {
+    const snapBlob = await snapshotCanvasToBlob();
+    if (snapBlob) {
+      fd.append('snapshot', new File([snapBlob], 'snapshot.png', { type: 'image/png' }));
+        logLine('Captured current model snapshot automatically');
+    }
+  } catch (e) {
+    console.warn('Failed to capture snapshot:', e);
+      logLine('Warning: Could not capture snapshot, continuing without it', 'warn');
+  }
+  
+    fd.append('prompt', activePrompt.value || '');
+  }
+
   btn.disabled = true;
   btn.textContent = 'Generating…';
   const statusEl = isStep4Mode 
@@ -1376,21 +1358,12 @@ function setPanel(which, show) {
 }
 
 function syncPanelButtons() {
-    const leftCollapsed = localStorage.getItem('panel:left') === '1';
-    const rightCollapsed = localStorage.getItem('panel:right') === '1';
-    if (toggleLeftBtn) {
-      toggleLeftBtn.textContent = leftCollapsed ? '▶ Left' : '◀ Left';
-    }
-    if (toggleRightBtn) {
-      toggleRightBtn.textContent = rightCollapsed ? '◀ Right' : 'Right ▶';
-    }
+    // Panel collapse functionality removed
 }
 
 function applyPanelState() {
-    const leftCollapsed = localStorage.getItem("panel:left") === "1";
-    const rightCollapsed = localStorage.getItem("panel:right") === "1";
-    document.body.classList.toggle("left-collapsed", leftCollapsed);
-    document.body.classList.toggle("right-collapsed", rightCollapsed);
+    // Panels are always visible - collapse functionality removed
+    document.body.classList.remove("left-collapsed", "right-collapsed");
 }
 function togglePanel(which) {
     const key = which === "left" ? "panel:left" : "panel:right";
@@ -1503,14 +1476,7 @@ recsApplyAll.onclick = async () => {
 
 
 // wire buttons (place after DOM is ready / in start())
-const toggleLeftBtn2 = document.getElementById("toggleLeftPanel");
-const toggleRightBtn2 = document.getElementById("toggleRightPanel");
-if (toggleLeftBtn2) {
-    toggleLeftBtn2.onclick = () => togglePanel("left");
-}
-if (toggleRightBtn2) {
-    toggleRightBtn2.onclick = () => togglePanel("right");
-}
+// Left and right panel toggles are now handled by toggleLeftBtnTab and toggleRightBtnTab above
 
 document.getElementById("reload").onclick = () =>
     loadModel().catch((e) => logLine(String(e), "err"));
@@ -1680,6 +1646,11 @@ if (ingestMesh) {
             // Store segmentation data for step 2
             segmentationData = result;
 
+            // Load the mesh file into the 3D viewer
+            if (result.mesh_path && file) {
+                await loadMeshFile(file, file.name);
+            }
+
             // Display segmentation results (step 1 complete)
             if (meshIngestStatus) {
                 meshIngestStatus.textContent = `Segmentation complete! Found ${result.segmentation?.num_parts || 0} parts. Please label them below.`;
@@ -1713,7 +1684,7 @@ if (ingestMesh) {
                     const shapeHint = part.shape_hint || 'unknown';
                     const touchesGround = part.touches_ground ? ' (touches ground)' : '';
                     
-                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #ebd2fa; border-radius: 4px; border-left: 3px solid #5f476e;">`;
+                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #f3ebf7; border-radius: 4px; border-left: 3px solid #5f476e;">`;
                     html += `<div style="font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">`;
                     html += `<span style="background: #5f476e; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">ID: ${partId}</span>`;
                     html += `<span style="color: #64748b; font-size: 11px;">${shapeHint}${touchesGround}</span>`;
@@ -1927,11 +1898,140 @@ if (submitLabelsBtn) {
     };
 }
 
+// Setup iterate shape mode switching (Direct Parameters vs Natural Language)
+function setupIterateShapeMode() {
+    const directModeRadio = document.getElementById('modifyModeDirect');
+    const naturalModeRadio = document.getElementById('modifyModeNatural');
+    const directParamsMode = document.getElementById('directParamsMode');
+    const naturalLanguageMode = document.getElementById('naturalLanguageMode');
+    
+    if (!directModeRadio || !naturalModeRadio || !directParamsMode || !naturalLanguageMode) {
+        console.warn('[setupIterateShapeMode] Required elements not found');
+        return;
+    }
+    
+    // Handle mode switching
+    function switchMode(mode) {
+        if (mode === 'direct') {
+            directParamsMode.style.display = 'block';
+            naturalLanguageMode.style.display = 'none';
+        } else {
+            directParamsMode.style.display = 'none';
+            naturalLanguageMode.style.display = 'block';
+        }
+    }
+    
+    // Set up radio button listeners
+    directModeRadio.addEventListener('change', () => {
+        if (directModeRadio.checked) {
+            switchMode('direct');
+        }
+    });
+    
+    naturalModeRadio.addEventListener('change', () => {
+        if (naturalModeRadio.checked) {
+            switchMode('natural');
+        }
+    });
+    
+    // Initialize to direct mode (default)
+    if (directModeRadio.checked) {
+        switchMode('direct');
+    } else if (naturalModeRadio.checked) {
+        switchMode('natural');
+    }
+}
+
 // Initialize iterate shape mode switching
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', setupIterateShapeMode);
 } else {
     setupIterateShapeMode();
+}
+
+// Function to apply direct parameter values
+async function applyDirectParams() {
+    const directParamsList = document.getElementById('directParamsList');
+    if (!directParamsList) {
+        console.error('[applyDirectParams] directParamsList not found');
+        return;
+    }
+    
+    // Collect parameter values from inputs
+    const parameters = {};
+    const inputs = directParamsList.querySelectorAll('input[type="number"]');
+    inputs.forEach(input => {
+        const paramName = input.id.replace('param_value_', '');
+        const value = parseFloat(input.value);
+        if (!isNaN(value) && value !== 0) {
+            // Convert to meters if needed (assuming inputs are in meters)
+            parameters[paramName] = value;
+        }
+    });
+    
+    if (Object.keys(parameters).length === 0) {
+        alert('Please enter at least one parameter value');
+        return;
+    }
+    
+    // Get mesh path from last ingest result
+    const lastResult = window.lastIngestResult;
+    if (!lastResult || !lastResult.mesh_path) {
+        alert('No mesh loaded. Please complete mesh ingestion first.');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/apply_mesh_params', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                mesh_path: lastResult.mesh_path,
+                parameters: parameters,
+            }),
+        });
+        
+        const result = await response.json();
+        if (!result.ok) {
+            throw new Error(result.error || 'Failed to apply parameters');
+        }
+        
+        // Save to history
+        const imageFile = document.getElementById('ref')?.files?.[0];
+        let imageData = null;
+        if (imageFile) {
+            imageData = await new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.readAsDataURL(imageFile);
+            });
+        }
+        
+        const instructions = document.getElementById('prompt')?.value || '';
+        
+        if (typeof saveRunToHistory === 'function') {
+            saveRunToHistory({
+                imageData: imageData,
+                instructions: instructions,
+                meshPath: result.glb_path || lastResult.mesh_path,
+                parameters: parameters,
+                category: lastResult.category || 'Unknown',
+            });
+        }
+        
+        logLine(`Applied ${Object.keys(parameters).length} parameter changes. Mesh saved to: ${result.glb_path}`, 'ok');
+        
+        // Reload the model if GLB path is provided
+        if (result.glb_path) {
+            // TODO: Load the new mesh into the 3D viewer
+            logLine('New mesh available. Reload viewer to see changes.', 'warn');
+        }
+        
+    } catch (e) {
+        console.error('[applyDirectParams] Error:', e);
+        logLine(`Error applying parameters: ${e.message}`, 'err');
+        alert(`Error: ${e.message}`);
+    }
 }
 
 // Set up apply direct params button
@@ -2088,13 +2188,24 @@ function setupParameterMappingPopup() {
 // Setup instruction bar
 function setupInstructionBar() {
     const instructionBar = document.getElementById('instructionBar');
+    const instructionBarMinimized = document.getElementById('instructionBarMinimized');
     const canvasPrompt = document.getElementById('canvasPrompt');
     const applyBtn = document.getElementById('applyCanvasInstructions');
-    const closeBtn = document.getElementById('closeInstructionBar');
+    const minimizeBtn = document.getElementById('minimizeInstructionBar');
+    const expandBtn = document.getElementById('expandInstructionBar');
     
-    if (closeBtn) {
-        closeBtn.onclick = () => {
+    if (minimizeBtn) {
+        minimizeBtn.onclick = () => {
             if (instructionBar) instructionBar.style.display = 'none';
+            if (instructionBarMinimized) instructionBarMinimized.style.display = 'block';
+        };
+    }
+    
+    if (expandBtn) {
+        expandBtn.onclick = () => {
+            if (instructionBar) instructionBar.style.display = 'block';
+            if (instructionBarMinimized) instructionBarMinimized.style.display = 'none';
+            if (canvasPrompt) canvasPrompt.focus();
         };
     }
     
@@ -2111,9 +2222,6 @@ function setupInstructionBar() {
             
             // TODO: Send instructions to VLM for code generation
             // This would integrate with the existing VLM code generation system
-            
-            // For now, just hide the bar
-            if (instructionBar) instructionBar.style.display = 'none';
         };
     }
     
@@ -2121,6 +2229,7 @@ function setupInstructionBar() {
     window.showInstructionBar = () => {
         if (instructionBar) {
             instructionBar.style.display = 'block';
+            if (instructionBarMinimized) instructionBarMinimized.style.display = 'none';
             if (canvasPrompt) canvasPrompt.focus();
         }
     };
@@ -2151,57 +2260,92 @@ function setupResizablePanels() {
   const MIN_PANEL_WIDTH = 150;  // Minimum width for each panel
   const MIN_CANVAS_WIDTH = 200;  // Minimum width for canvas area
   
+  let isResizing = false;
+  let startX = 0;
+  let startLeftWidth = 0;
+  let startRightWidth = 0;
+  
   function resizeLeft(e) {
+    if (!isResizing) return;
     e.preventDefault();
+    e.stopPropagation();
+    
     const windowWidth = window.innerWidth;
     const currentRightWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--right')) || 380;
     
+    // Calculate new width based on mouse position
+    const deltaX = e.clientX - startX;
+    const newWidth = startLeftWidth + deltaX;
+    
     // Calculate maximum left width: window width - min right panel - min canvas
     const maxLeftWidth = windowWidth - MIN_PANEL_WIDTH - MIN_CANVAS_WIDTH;
-    const newWidth = e.clientX;
     
     // Constrain: min panel width <= newWidth <= max (ensuring right panel and canvas have space)
-    if (newWidth >= MIN_PANEL_WIDTH && newWidth <= maxLeftWidth) {
-      document.documentElement.style.setProperty('--sidebar', `${newWidth}px`);
-      localStorage.setItem('sidebar-width', newWidth);
+    const constrainedWidth = Math.max(MIN_PANEL_WIDTH, Math.min(newWidth, maxLeftWidth));
+    
+    document.documentElement.style.setProperty('--sidebar', `${constrainedWidth}px`);
+    localStorage.setItem('sidebar-width', constrainedWidth);
       window.dispatchEvent(new Event('resize'));
-    }
   }
   
   function resizeRight(e) {
+    if (!isResizing) return;
     e.preventDefault();
+    e.stopPropagation();
+    
     const windowWidth = window.innerWidth;
     const currentLeftWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar')) || 320;
     
+    // Calculate new width based on mouse position (right panel grows leftward)
+    const deltaX = startX - e.clientX;
+    const newWidth = startRightWidth + deltaX;
+    
     // Calculate maximum right width: window width - min left panel - min canvas
     const maxRightWidth = windowWidth - MIN_PANEL_WIDTH - MIN_CANVAS_WIDTH;
-    const newWidth = windowWidth - e.clientX;
     
     // Constrain: min panel width <= newWidth <= max (ensuring left panel and canvas have space)
-    if (newWidth >= MIN_PANEL_WIDTH && newWidth <= maxRightWidth) {
-      document.documentElement.style.setProperty('--right', `${newWidth}px`);
-      localStorage.setItem('right-width', newWidth);
+    const constrainedWidth = Math.max(MIN_PANEL_WIDTH, Math.min(newWidth, maxRightWidth));
+    
+    document.documentElement.style.setProperty('--right', `${constrainedWidth}px`);
+    localStorage.setItem('right-width', constrainedWidth);
       window.dispatchEvent(new Event('resize'));
     }
+  
+  function stopResize() {
+    isResizing = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', resizeLeft);
+    document.removeEventListener('mousemove', resizeRight);
   }
   
   if (leftResizeHandle) {
     leftResizeHandle.addEventListener('mousedown', (e) => {
       e.preventDefault();
+      e.stopPropagation();
+      isResizing = true;
+      startX = e.clientX;
+      startLeftWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar')) || 320;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
       document.addEventListener('mousemove', resizeLeft);
-      document.addEventListener('mouseup', () => {
-        document.removeEventListener('mousemove', resizeLeft);
-      }, { once: true });
+      document.addEventListener('mouseup', stopResize, { once: true });
+      document.addEventListener('mouseleave', stopResize, { once: true });
     });
   }
   
   if (rightResizeHandle) {
     rightResizeHandle.addEventListener('mousedown', (e) => {
       e.preventDefault();
+      e.stopPropagation();
+      isResizing = true;
+      startX = e.clientX;
+      startRightWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--right')) || 380;
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
       document.addEventListener('mousemove', resizeRight);
-      document.addEventListener('mouseup', () => {
-        document.removeEventListener('mousemove', resizeRight);
-      }, { once: true });
+      document.addEventListener('mouseup', stopResize, { once: true });
+      document.addEventListener('mouseleave', stopResize, { once: true });
     });
   }
   
@@ -2262,7 +2406,8 @@ function setupResizablePanels() {
     applyPanelState();
     syncPanelButtons();
     setupToggles();
-    setupResizablePanels();
+    // Resizable panels removed - was buggy
+    // setupResizablePanels();
     
     // Ensure canvas is sized before starting animation
     resize();
@@ -2477,4 +2622,199 @@ function initializeStepManagement() {
     // Expose updateStepState for external use
     window.updateStepState = updateStepState;
     window.getCurrentStep = () => currentStep;
+}
+
+// History Management UI
+function setupHistoryUI() {
+    const viewHistoryBtn = document.getElementById('viewHistory');
+    const historyModal = document.getElementById('historyModal');
+    const closeHistoryModal = document.getElementById('closeHistoryModal');
+    const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+    const historyList = document.getElementById('historyList');
+    
+    if (!viewHistoryBtn || !historyModal) {
+        console.warn('[history] History UI elements not found');
+        return;
+    }
+    
+    // Open history modal
+    viewHistoryBtn.addEventListener('click', () => {
+        renderHistoryList();
+        historyModal.style.display = 'block';
+    });
+    
+    // Close history modal
+    if (closeHistoryModal) {
+        closeHistoryModal.addEventListener('click', () => {
+            historyModal.style.display = 'none';
+        });
+    }
+    
+    // Close on background click
+    historyModal.addEventListener('click', (e) => {
+        if (e.target === historyModal) {
+            historyModal.style.display = 'none';
+        }
+    });
+    
+    // Clear history
+    if (clearHistoryBtn) {
+        clearHistoryBtn.addEventListener('click', () => {
+            if (confirm('Clear all history? (Saved runs will be kept)')) {
+                if (typeof clearHistory === 'function') {
+                    clearHistory(true); // Keep saved runs
+                    renderHistoryList();
+                }
+            }
+        });
+    }
+    
+    function renderHistoryList() {
+        if (!historyList || typeof getHistory !== 'function') return;
+        
+        const history = getHistory();
+        
+        if (history.length === 0) {
+            historyList.innerHTML = `
+                <div style="text-align: center; padding: 40px; color: #94a3b8; font-style: italic;">
+                    No history yet. Complete a mesh processing run to see it here.
+                </div>
+            `;
+            return;
+        }
+        
+        historyList.innerHTML = history.map(run => {
+            const date = new Date(run.timestamp);
+            const dateStr = date.toLocaleString();
+            const imagePreview = run.imageData ? 
+                `<img src="${run.imageData}" alt="Reference image" style="max-width: 100%; max-height: 150px; border-radius: 4px; border: 1px solid #e2e8f0;" />` :
+                '<div style="padding: 20px; background: #f8fafc; border-radius: 4px; text-align: center; color: #94a3b8;">No image</div>';
+            
+            const paramsList = run.parameters && Object.keys(run.parameters).length > 0 ?
+                Object.entries(run.parameters).map(([key, value]) => 
+                    `<div style="font-size: 11px; color: #64748b;">${key}: ${value}</div>`
+                ).join('') :
+                '<div style="font-size: 11px; color: #94a3b8; font-style: italic;">No parameters</div>';
+            
+            return `
+                <div id="history-run-${run.id}" style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; background: ${run.saved ? '#fef3c7' : '#fff'};">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+                        <div>
+                            <div style="font-weight: 600; color: #1f2937; margin-bottom: 4px;">${run.category}</div>
+                            <div style="font-size: 11px; color: #64748b;">${dateStr}</div>
+                        </div>
+                        <div style="display: flex; gap: 6px;">
+                            <button onclick="toggleRunSaved('${run.id}', ${!run.saved})" 
+                                    style="padding: 4px 8px; background: ${run.saved ? '#fef3c7' : '#f8fafc'}; color: #5f476e; border: 1px solid #5f476e; border-radius: 4px; cursor: pointer; font-size: 11px;">
+                                ${run.saved ? '★ Saved' : '☆ Save'}
+                            </button>
+                            <button onclick="loadHistoryRun('${run.id}')" 
+                                    style="padding: 4px 8px; background: #5f476e; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">
+                                Load
+                            </button>
+                            <button onclick="deleteHistoryRun('${run.id}')" 
+                                    style="padding: 4px 8px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 200px 1fr; gap: 16px; margin-bottom: 12px;">
+                        <div>${imagePreview}</div>
+                        <div>
+                            <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px; color: #374151;">Instructions:</div>
+                            <div style="font-size: 11px; color: #64748b; margin-bottom: 12px; padding: 8px; background: #f8fafc; border-radius: 4px; min-height: 40px;">
+                                ${run.instructions || '<em>No instructions</em>'}
+                            </div>
+                            <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px; color: #374151;">Parameters:</div>
+                            <div style="padding: 8px; background: #f8fafc; border-radius: 4px;">
+                                ${paramsList}
+                            </div>
+                        </div>
+                    </div>
+                    ${run.meshPath ? `<div style="font-size: 11px; color: #64748b;">Mesh: ${run.meshPath}</div>` : ''}
+                </div>
+            `;
+        }).join('');
+    }
+    
+    // Helper functions for history actions
+    window.toggleRunSaved = (runId, saved) => {
+        if (typeof toggleRunSaved === 'function') {
+            toggleRunSaved(runId, saved);
+            renderHistoryList();
+        }
+    };
+    
+    window.deleteHistoryRun = (runId) => {
+        if (confirm('Delete this run from history?')) {
+            if (typeof deleteRun === 'function') {
+                deleteRun(runId);
+                renderHistoryList();
+            }
+        }
+    };
+    
+    window.loadHistoryRun = async (runId) => {
+        if (typeof getRunById !== 'function') return;
+        
+        const run = getRunById(runId);
+        if (!run) {
+            alert('Run not found');
+            return;
+        }
+        
+        // Load image if available
+        if (run.imageData) {
+            // Convert base64 to blob and set as file input
+            const blob = await fetch(run.imageData).then(r => r.blob());
+            const file = new File([blob], 'history_image.jpg', { type: 'image/jpeg' });
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(file);
+            const imageInput = document.getElementById('ref');
+            if (imageInput) {
+                imageInput.files = dataTransfer.files;
+                imageInput.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }
+        
+        // Load instructions
+        const promptEl = document.getElementById('prompt');
+        if (promptEl && run.instructions) {
+            promptEl.value = run.instructions;
+        }
+        
+        // Load parameters into direct params inputs
+        if (run.parameters && Object.keys(run.parameters).length > 0) {
+            // Switch to direct params mode
+            const directModeRadio = document.getElementById('modifyModeDirect');
+            if (directModeRadio) {
+                directModeRadio.checked = true;
+                directModeRadio.dispatchEvent(new Event('change'));
+            }
+            
+            // Populate parameter inputs
+            const directParamsList = document.getElementById('directParamsList');
+            if (directParamsList) {
+                Object.entries(run.parameters).forEach(([key, value]) => {
+                    const input = document.getElementById(`param_value_${key}`);
+                    if (input) {
+                        input.value = value;
+                    }
+                    // If input doesn't exist, we might need to create it via populateDirectParams
+                });
+            }
+        }
+        
+        // Close modal
+        historyModal.style.display = 'none';
+        
+        logLine(`Loaded historical run: ${run.category} from ${new Date(run.timestamp).toLocaleString()}`, 'ok');
+    };
+}
+
+// Initialize history UI when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupHistoryUI);
+} else {
+    setupHistoryUI();
 }

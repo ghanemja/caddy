@@ -6,7 +6,9 @@
     {% include "partials/_bar.html" %}
     {% include "partials/_stepper.html" %}
     <div id="left">
-      <div class="resize-handle" id="leftResizeHandle"></div>
+      <div id="leftPanelHeader" style="padding: 12px 16px; border-bottom: 2px solid #5f476e; background: #f3ebf7;">
+        <h2 style="margin: 0; font-size: 16px; color: #5f476e; font-weight: 700; text-transform: none; letter-spacing: 0;">Workflow</h2>
+      </div>
       {% include "partials/_gen.html" %}
       {% include "partials/_right_mesh_ingest.html" %}
       {% include "partials/_confirm_params.html" %}
@@ -14,8 +16,7 @@
     </div>
     {% include "partials/_canvas.html" %}
     <div id="right">
-      <div class="resize-handle" id="rightResizeHandle"></div>
-      <div style="padding: 12px 16px; border-bottom: 2px solid #5f476e; background: #ebd2fa;">
+      <div id="rightPanelHeader" style="padding: 12px 16px; border-bottom: 2px solid #5f476e; background: #f3ebf7;">
         <h2 style="margin: 0; font-size: 16px; color: #5f476e; font-weight: 700; text-transform: none; letter-spacing: 0;">Advanced Insights</h2>
       </div>
       {% include "partials/_left_camera.html" %}
@@ -23,6 +24,7 @@
       {% include "partials/_right_recs.html" %}
     </div>
     {% include "partials/_param_mapping_popup.html" %}
+    {% include "partials/_history_modal.html" %}
     {% include "partials/_console.html" %}
 
     <!-- External module script (recommended) -->
