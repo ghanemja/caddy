@@ -1484,6 +1484,28 @@ const meshIngestStatus = document.getElementById('meshIngestStatus');
 const meshIngestResults = document.getElementById('meshIngestResults');
 const meshCategory = document.getElementById('meshCategory');
 const meshParameters = document.getElementById('meshParameters');
+const isCadQueryFile = document.getElementById('isCadQueryFile');
+const isCADFile = document.getElementById('isCADFile');
+
+// Handle file type checkboxes (mutually exclusive)
+if (isCadQueryFile && isCADFile) {
+    isCadQueryFile.onchange = () => {
+        if (isCadQueryFile.checked) {
+            isCADFile.checked = false;
+            if (meshFile) {
+                meshFile.accept = '.py';
+            }
+        }
+    };
+    isCADFile.onchange = () => {
+        if (isCADFile.checked) {
+            isCadQueryFile.checked = false;
+            if (meshFile) {
+                meshFile.accept = '.obj,.stl,.ply';
+            }
+        }
+    };
+}
 
 if (clearMesh) {
     clearMesh.onclick = () => {
@@ -1493,29 +1515,226 @@ if (clearMesh) {
     };
 }
 
+// Load demo STL file
+const loadDemoSTLBtn = document.getElementById('loadDemoSTL');
+if (loadDemoSTLBtn) {
+    loadDemoSTLBtn.onclick = async () => {
+        const meshFile = document.getElementById('meshFile');
+        if (!meshFile) return;
+        
+        try {
+            loadDemoSTLBtn.disabled = true;
+            loadDemoSTLBtn.textContent = 'Loading...';
+            
+            // Fetch the demo STL file from server
+            const response = await fetch('/demo/curiosity_rover.stl');
+            if (!response.ok) {
+                throw new Error(`File not found (${response.status})`);
+            }
+            
+            const blob = await response.blob();
+            const file = new File([blob], 'curiosity_rover.stl', { type: 'model/stl' });
+            
+            // Create a DataTransfer to set the file input
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(file);
+            meshFile.files = dataTransfer.files;
+            
+            // Set file type checkboxes
+            const isCADFile = document.getElementById('isCADFile');
+            const isCadQueryFile = document.getElementById('isCadQueryFile');
+            if (isCADFile) isCADFile.checked = true;
+            if (isCadQueryFile) isCadQueryFile.checked = false;
+            
+            // Trigger change event
+            meshFile.dispatchEvent(new Event('change', { bubbles: true }));
+            
+            logLine('✓ Loaded demo Curiosity Rover STL file', 'ok');
+            loadDemoSTLBtn.textContent = '✓ Loaded Demo STL';
+            loadDemoSTLBtn.style.background = '#10b981';
+            
+            setTimeout(() => {
+                loadDemoSTLBtn.textContent = 'Load Demo STL';
+                loadDemoSTLBtn.style.background = '#10b981';
+                loadDemoSTLBtn.disabled = false;
+            }, 2000);
+        } catch (e) {
+            console.error('[load_demo_stl]', e);
+            logLine(`Could not load demo STL: ${e.message}`, 'err');
+            alert('Could not load demo STL file. Please upload a file manually.');
+            loadDemoSTLBtn.textContent = 'Load Demo STL';
+            loadDemoSTLBtn.disabled = false;
+        }
+    };
+}
+
+// Store segmentation results for step 2
+let segmentationData = null;
+
 if (ingestMesh) {
     ingestMesh.onclick = async () => {
         if (!meshFile || !meshFile.files || !meshFile.files[0]) {
             if (meshIngestStatus) {
-                meshIngestStatus.textContent = 'Please select a mesh file first.';
+                meshIngestStatus.textContent = 'Please select a file first.';
                 meshIngestStatus.style.color = '#b45309';
             }
             return;
         }
 
         const file = meshFile.files[0];
+        
+        // Check file type
+        const isCadQuery = isCadQueryFile && isCadQueryFile.checked;
+        const isCAD = isCADFile && isCADFile.checked;
+        
+        if (isCadQuery && file.name.endsWith('.py')) {
+            // Handle CadQuery file upload
+            if (meshIngestStatus) {
+                meshIngestStatus.textContent = 'CadQuery file upload - processing...';
+                meshIngestStatus.style.color = '#64748b';
+            }
+            // TODO: Add CadQuery file processing logic here
+            logLine('CadQuery file upload not yet implemented. Please use CAD/mesh file for now.', 'warn');
+            return;
+        } else if (!isCAD && !file.name.match(/\.(obj|stl|ply)$/i)) {
+            if (meshIngestStatus) {
+                meshIngestStatus.textContent = 'Please select a CAD/mesh file (.obj, .stl, .ply) or check "CAD/Mesh file" option.';
+                meshIngestStatus.style.color = '#b45309';
+            }
+            return;
+        }
         if (meshIngestStatus) {
-            meshIngestStatus.textContent = 'Processing mesh... (First run may take 2-3 minutes to download VLM model)';
+            meshIngestStatus.textContent = 'Running segmentation... (fast, ~1-5 seconds)';
             meshIngestStatus.style.color = '#64748b';
         }
         if (meshIngestResults) meshIngestResults.style.display = 'none';
+        const partLabelingSection = document.getElementById('partLabelingSection');
+        if (partLabelingSection) partLabelingSection.style.display = 'none';
         ingestMesh.disabled = true;
 
         try {
             const data = new FormData();
             data.append('mesh', file);
 
-            const r = await fetch('/ingest_mesh', { method: 'POST', body: data });
+            // Step 1: Run segmentation only
+            const r = await fetch('/ingest_mesh_segment', { method: 'POST', body: data });
+            if (!r.ok) {
+                const err = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+                throw new Error(err.error || `HTTP ${r.status}`);
+            }
+
+            const result = await r.json();
+            if (!result.ok) {
+                throw new Error(result.error || 'Unknown error');
+            }
+
+            // Store segmentation data for step 2
+            segmentationData = result;
+
+            // Display segmentation results (step 1 complete)
+            if (meshIngestStatus) {
+                meshIngestStatus.textContent = `✓ Segmentation complete! Found ${result.segmentation?.num_parts || 0} parts. Please label them below.`;
+                meshIngestStatus.style.color = '#059669';
+            }
+
+            // Show part labeling UI
+            const partLabelingSection = document.getElementById('partLabelingSection');
+            const partLabelingList = document.getElementById('partLabelingList');
+            const submitLabelsBtn = document.getElementById('submitLabels');
+            
+            if (partLabelingSection && partLabelingList && result.part_table) {
+                partLabelingSection.style.display = 'block';
+                
+                // Build labeling UI
+                let html = '';
+                const parts = result.part_table.parts || [];
+                parts.forEach(part => {
+                    const partId = part.part_id;
+                    const currentName = part.name || part.provisional_name || `part_${partId}`;
+                    const shapeHint = part.shape_hint || 'unknown';
+                    const touchesGround = part.touches_ground ? ' (touches ground)' : '';
+                    
+                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #f8fafc; border-radius: 4px; border-left: 3px solid #3b82f6;">`;
+                    html += `<div style="font-weight: 600; margin-bottom: 4px;">Part ${partId} <span style="color: #64748b; font-size: 11px;">(${shapeHint}${touchesGround})</span></div>`;
+                    html += `<input type="text" id="part_label_${partId}" value="${currentName}" placeholder="Enter semantic name (e.g., backrest)" style="width: 100%; padding: 4px; border: 1px solid #cbd5e1; border-radius: 3px; font-size: 12px;" />`;
+                    html += `</div>`;
+                });
+                partLabelingList.innerHTML = html;
+                
+                if (submitLabelsBtn) {
+                    submitLabelsBtn.style.display = 'block';
+                }
+            }
+
+            // Update button text for next step
+            if (ingestMesh) {
+                ingestMesh.textContent = 'Step 1: Segment Mesh (Done ✓)';
+                ingestMesh.disabled = false;
+            }
+
+            // Log to console
+            console.log('[mesh_ingest] Segmentation complete:', result);
+            logLine(`Segmentation complete: ${result.segmentation?.num_parts || 0} parts detected. Please label them.`, 'ok');
+
+        } catch (e) {
+            if (meshIngestStatus) {
+                meshIngestStatus.textContent = `✗ Error: ${e.message}`;
+                meshIngestStatus.style.color = '#dc2626';
+            }
+            console.error('[mesh_ingest] Error:', e);
+            logLine(`Mesh ingestion error: ${e.message}`, 'err');
+        } finally {
+            ingestMesh.disabled = false;
+        }
+    };
+}
+
+// Step 2: Submit labels and run VLM
+const submitLabelsBtn = document.getElementById('submitLabels');
+if (submitLabelsBtn) {
+    submitLabelsBtn.onclick = async () => {
+        if (!segmentationData) {
+            alert('Please run segmentation first (Step 1)');
+            return;
+        }
+
+        // Collect user labels
+        const partLabels = {
+            parts: []
+        };
+        
+        const parts = segmentationData.part_table?.parts || [];
+        parts.forEach(part => {
+            const input = document.getElementById(`part_label_${part.part_id}`);
+            const userLabel = input ? input.value.trim() : '';
+            
+            partLabels.parts.push({
+                part_id: part.part_id,
+                name: userLabel || null,  // Use null if empty (will keep provisional name)
+                description: null,  // Optional: could add description field later
+            });
+        });
+
+        // Update UI
+        if (meshIngestStatus) {
+            meshIngestStatus.textContent = 'Running VLM analysis with your labels... (may take 30s-5min)';
+            meshIngestStatus.style.color = '#64748b';
+        }
+        submitLabelsBtn.disabled = true;
+        if (meshIngestResults) meshIngestResults.style.display = 'none';
+
+        try {
+            // Call step 2 endpoint with labels
+            const r = await fetch('/ingest_mesh_label', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mesh_path: segmentationData.mesh_path,
+                    temp_dir: segmentationData.temp_dir,
+                    part_labels: partLabels,
+                }),
+            });
+
             if (!r.ok) {
                 const err = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
                 throw new Error(err.error || `HTTP ${r.status}`);
@@ -1534,39 +1753,29 @@ if (ingestMesh) {
 
             if (meshCategory) {
                 const category = result.category || 'Unknown';
-                const parts = result.metadata?.identified_parts || result.extra?.identified_parts || [];
-                let categoryText = `Category: ${category}`;
-                if (parts && parts.length > 0) {
-                    categoryText += ` | Parts: ${parts.join(', ')}`;
-                }
-                meshCategory.textContent = categoryText;
+                meshCategory.textContent = `Category: ${category}`;
             }
 
             if (meshParameters) {
                 let html = '';
                 
-                // Show proposed semantic parameters (mapping from p1, p2, ... to semantic names)
                 const proposedParams = result.proposed_parameters || result.final_parameters || [];
                 if (proposedParams.length > 0) {
                     html += '<div style="margin-bottom: 12px;"><strong>Proposed Semantic Parameters:</strong></div>';
                     proposedParams.forEach(p => {
                         const units = p.units ? ` ${p.units}` : '';
                         const conf = p.confidence ? ` (conf: ${(p.confidence * 100).toFixed(0)}%)` : '';
-                        const semanticName = p.semantic_name || p.name; // Support both new and old format
+                        const semanticName = p.semantic_name || p.name;
                         const paramId = p.id || '?';
                         html += `<div style="margin: 4px 0; padding: 6px; background: #f8fafc; border-radius: 4px; border-left: 3px solid #3b82f6;">`;
                         html += `<div style="font-weight: 600;">${paramId} → <span style="color: #1e40af;">${semanticName}</span>: ${p.value.toFixed(4)}${units}${conf}</div>`;
-                        html += `<div style="color: #64748b; font-size: 11px; margin-top: 2px;">${p.description || p.proposed_description || ''}</div>`;
-                        if (p.raw_sources && p.raw_sources.length > 0) {
-                            html += `<div style="color: #94a3b8; font-size: 10px; margin-top: 2px;">Sources: ${p.raw_sources.join(', ')}</div>`;
-                        }
+                        html += `<div style="color: #64748b; font-size: 11px; margin-top: 2px;">${p.description || ''}</div>`;
                         html += `</div>`;
                     });
                 } else {
                     html += '<div style="color: #64748b;">No semantic parameters proposed.</div>';
                 }
 
-                // Show raw parameters (p1, p2, p3, ...)
                 if (result.raw_parameters && result.raw_parameters.length > 0) {
                     html += '<div style="margin-top: 16px; margin-bottom: 8px; padding-top: 12px; border-top: 1px solid #e2e8f0;"><strong>Raw Geometric Parameters (first 10):</strong></div>';
                     result.raw_parameters.slice(0, 10).forEach(p => {
@@ -1576,23 +1785,14 @@ if (ingestMesh) {
                         if (p.description) {
                             html += `<div style="color: #64748b; font-size: 10px; margin-top: 2px;">${p.description}</div>`;
                         }
-                        if (p.part_labels && p.part_labels.length > 0) {
-                            html += `<div style="color: #94a3b8; font-size: 10px;">Parts: ${p.part_labels.join(', ')}</div>`;
-                        }
                         html += `</div>`;
                     });
-                    if (result.raw_parameters.length > 10) {
-                        html += `<div style="color: #64748b; font-size: 11px; margin-top: 4px;">... and ${result.raw_parameters.length - 10} more raw parameters</div>`;
-                    }
                 }
 
                 meshParameters.innerHTML = html;
             }
 
             if (meshIngestResults) meshIngestResults.style.display = 'block';
-
-            // Show parameter mapping popup
-            showParameterMappingPopup(result);
 
             // Log to console
             console.log('[mesh_ingest] Results:', result);
@@ -1605,9 +1805,9 @@ if (ingestMesh) {
                 meshIngestStatus.style.color = '#dc2626';
             }
             console.error('[mesh_ingest] Error:', e);
-            logLine(`Mesh ingestion error: ${e.message}`, 'err');
+            logLine(`Mesh labeling/VLM error: ${e.message}`, 'err');
         } finally {
-            ingestMesh.disabled = false;
+            submitLabelsBtn.disabled = false;
         }
     };
 }
@@ -1811,58 +2011,8 @@ window.addEventListener('load', () => {
     setupParameterMappingPopup();
     setupInstructionBar();
     
-    // Load default STL file for mesh ingestion
-    loadDefaultMesh();
+    // Demo STL loading is now handled by the loadDemoSTL button in the HTML
 });
-
-// Load default STL file
-function loadDefaultMesh() {
-    const meshFile = document.getElementById('meshFile');
-    if (!meshFile) return;
-    
-    const defaultPath = '/Users/janelleg/Downloads/Curiosity Rover 3D Printed Model/Simplified Curiosity Model (Small)/STL Files/body-small.STL';
-    
-    // Check if file exists via fetch (this won't work for local files, so we'll need a server endpoint)
-    // For now, we'll create a button to load it
-    const ingestSection = document.getElementById('meshIngestSection');
-    if (ingestSection) {
-        const loadDefaultBtn = document.createElement('button');
-        loadDefaultBtn.textContent = 'Load Demo (Curiosity Rover)';
-        loadDefaultBtn.style.cssText = 'width: 100%; margin-top: 8px; padding: 8px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;';
-        loadDefaultBtn.onclick = async () => {
-            try {
-                // Fetch the file from server (we'll need to add an endpoint)
-                const response = await fetch('/demo/curiosity_rover.stl');
-                if (!response.ok) throw new Error('File not found');
-                
-                const blob = await response.blob();
-                const file = new File([blob], 'body-small.STL', { type: 'model/stl' });
-                
-                // Create a DataTransfer to set the file input
-                const dataTransfer = new DataTransfer();
-                dataTransfer.items.add(file);
-                meshFile.files = dataTransfer.files;
-                
-                // Trigger change event
-                meshFile.dispatchEvent(new Event('change', { bubbles: true }));
-                
-                logLine('Loaded default Curiosity Rover STL file', 'ok');
-            } catch (e) {
-                console.error('[load_default_mesh]', e);
-                logLine(`Could not load default mesh: ${e.message}`, 'err');
-                alert('Could not load default mesh. Please upload the file manually.');
-            }
-        };
-        
-        const sectionBody = ingestSection.querySelector('.section-body');
-        if (sectionBody) {
-            const existingBtn = sectionBody.querySelector('button[onclick*="curiosity"]');
-            if (!existingBtn) {
-                sectionBody.insertBefore(loadDefaultBtn, sectionBody.firstChild);
-            }
-        }
-    }
-}
 
 // Resizable panels
 function setupResizablePanels() {
@@ -2020,10 +2170,11 @@ function setupResizablePanels() {
         resize();
     }
     
-    await loadModel().catch((e) => {
-        logLine(String(e), "err");
-        console.error("Failed to load model:", e);
-    });
+    // Don't load model by default - wait for user to upload mesh or parametric model
+    // await loadModel().catch((e) => {
+    //     logLine(String(e), "err");
+    //     console.error("Failed to load model:", e);
+    // });
     fov.value = String(Math.round(camera.fov));
     fovVal.textContent = `${Math.round(camera.fov)}°`;
     near.value = String(camera.near);

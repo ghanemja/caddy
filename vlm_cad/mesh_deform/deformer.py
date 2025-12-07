@@ -11,10 +11,13 @@ of the mesh geometry.
 from __future__ import annotations  # Defer evaluation of type hints
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, TYPE_CHECKING
 import numpy as np
 
 from .utils import compute_pca_axis, normalize_projection, get_world_axis
+
+if TYPE_CHECKING:
+    from ..parts.parts import PartTable, PartInfo
 
 
 @dataclass
@@ -55,6 +58,8 @@ class ParametricMeshDeformer:
         part_labels: np.ndarray,
         part_label_names: Dict[int, str],
         config: Dict[str, DeformationConfig],
+        part_table: Optional["PartTable"] = None,
+        part_info_dict: Optional[Dict[int, "PartInfo"]] = None,
     ):
         """
         Initialize the parametric mesh deformer.
@@ -62,16 +67,37 @@ class ParametricMeshDeformer:
         Args:
             base_mesh: original mesh geometry (undeformed)
             base_parameters: semantic param values at baseline (e.g. {"wing_span": 2.0})
-            part_labels: [N] array of integer part IDs per vertex (from PointNet++)
+            part_labels: [N] array of integer part IDs per vertex
             part_label_names: mapping from part ID -> human-readable name
                 (e.g., {0: "fuselage", 1: "left_wing", ...})
             config: mapping from semantic param name -> DeformationConfig
+            part_table: Optional PartTable for part metadata
+            part_info_dict: Optional dict of part_id -> PartInfo (alternative to part_table)
         """
         self.base_mesh = base_mesh
         self.base_parameters = base_parameters.copy()
         self.part_labels = np.asarray(part_labels)
         self.part_label_names = part_label_names.copy()
         self.config = config.copy()
+        
+        # Store PartTable or build from part_info_dict
+        if part_table is not None:
+            self.part_table = part_table
+        elif part_info_dict is not None:
+            # Create a minimal PartTable from part_info_dict
+            from ..parts.parts import PartTable
+            self.part_table = PartTable(
+                parts=part_info_dict,
+                vertex_part_labels=part_labels,
+            )
+        else:
+            self.part_table = None
+        
+        # Per-part enabled flags (for enable/disable operations)
+        self.part_enabled: Dict[int, bool] = {}
+        if self.part_table:
+            for part_id in self.part_table.get_part_ids():
+                self.part_enabled[part_id] = True
         
         # Validate inputs
         if len(self.part_labels) != len(self.base_mesh.vertices):
@@ -82,7 +108,8 @@ class ParametricMeshDeformer:
     
     def deform(
         self,
-        new_parameters: Dict[str, float]
+        new_parameters: Dict[str, float],
+        enabled_parts: Optional[Dict[int, bool]] = None,
     ) -> MeshData:
         """
         Deform the mesh based on new parameter values.
@@ -102,11 +129,50 @@ class ParametricMeshDeformer:
         Returns:
             New MeshData with deformed vertices
         """
-        # Start with a copy of the base vertices
         verts = self.base_mesh.vertices.copy()
+        faces = self.base_mesh.faces.copy()
         
-        # Apply deformations for each parameter
+        # Update enabled flags if provided
+        if enabled_parts is not None:
+            self.part_enabled.update(enabled_parts)
+        
+        # Apply per-part enable/disable: remove faces for disabled parts
+        if self.part_enabled:
+            enabled_part_ids = {pid for pid, enabled in self.part_enabled.items() if enabled}
+            if enabled_part_ids:
+                # Filter faces: keep only faces where all vertices belong to enabled parts
+                face_mask = np.array([
+                    all(self.part_labels[face] in enabled_part_ids for face in face_verts)
+                    for face_verts in faces
+                ])
+                faces = faces[face_mask]
+        
+        # Handle generic per-part parameters (part_<id>_scale_long, part_<id>_offset_long, etc.)
+        # These are category-agnostic and use PartInfo geometry
+        for param_name, param_value in new_parameters.items():
+            if param_name.startswith("part_") and "_" in param_name:
+                # Parse: part_<id>_<operation>
+                parts = param_name.split("_")
+                if len(parts) >= 3 and parts[0] == "part":
+                    try:
+                        part_id = int(parts[1])
+                        operation = "_".join(parts[2:])  # e.g., "scale_long", "offset_long"
+                        
+                        if self.part_table and part_id in self.part_table.parts:
+                            part_info = self.part_table.parts[part_id]
+                            verts = self._apply_generic_part_operation(
+                                verts, part_id, operation, param_value, part_info
+                            )
+                    except (ValueError, IndexError):
+                        # Not a part_<id>_<op> parameter, skip
+                        pass
+        
+        # Apply semantic parameter-based deformations
         for param_name, new_value in new_parameters.items():
+            if param_name.startswith("part_"):
+                # Skip generic part parameters (already handled above)
+                continue
+                
             if param_name not in self.config:
                 # Skip parameters not in config
                 continue
@@ -131,10 +197,10 @@ class ParametricMeshDeformer:
                 # Unknown mode - skip
                 continue
         
-        # Return new mesh data with deformed vertices
+        # Return new mesh data with deformed vertices and filtered faces
         return MeshData(
             vertices=verts,
-            faces=self.base_mesh.faces.copy(),
+            faces=faces,
         )
     
     def _apply_axis_stretch(
@@ -226,6 +292,96 @@ class ParametricMeshDeformer:
         # Apply deltas to affected vertices
         verts_deformed = verts.copy()
         verts_deformed[affected_vertex_indices] = V_part + deltas
+        
+        return verts_deformed
+    
+    def _apply_generic_part_operation(
+        self,
+        verts: np.ndarray,
+        part_id: int,
+        operation: str,
+        value: float,
+        part_info: "PartInfo",
+    ) -> np.ndarray:
+        """
+        Apply a generic, category-agnostic operation to a part.
+        
+        Uses PartInfo geometry (principal_axes, extents) to perform operations
+        without needing semantic knowledge.
+        
+        Args:
+            verts: vertex array [N, 3]
+            part_id: part ID to operate on
+            operation: operation type (e.g., "scale_long", "offset_long", "offset_up")
+            value: operation value
+            part_info: PartInfo for the part
+            
+        Returns:
+            Modified vertex array
+        """
+        # Get vertices belonging to this part
+        part_mask = self.part_labels == part_id
+        part_vertex_indices = np.where(part_mask)[0]
+        
+        if len(part_vertex_indices) == 0:
+            return verts
+        
+        verts_part = verts[part_vertex_indices]
+        centroid = part_info.centroid
+        
+        # Get principal axes (columns are the principal directions)
+        axes = part_info.principal_axes  # [3, 3]
+        extents = part_info.extents  # [3]
+        
+        # Determine which axis to use based on operation
+        if "long" in operation:
+            axis_idx = 0  # Longest axis
+        elif "short1" in operation or "short" in operation:
+            axis_idx = 1  # Second longest
+        elif "short2" in operation:
+            axis_idx = 2  # Shortest
+        elif "up" in operation or "z" in operation:
+            # Use Z-up axis (world space)
+            axis = np.array([0, 0, 1], dtype=np.float32)
+        else:
+            # Default to longest axis
+            axis_idx = 0
+        
+        if "up" not in operation and "z" not in operation:
+            axis = axes[:, axis_idx]  # Principal axis direction
+        
+        # Center vertices relative to part centroid
+        verts_centered = verts_part - centroid
+        
+        # Apply operation
+        if "scale" in operation:
+            # Scale along axis
+            projections = np.dot(verts_centered, axis)
+            # Normalize to [0, 1] for smooth scaling
+            if len(projections) > 0:
+                proj_min, proj_max = np.min(projections), np.max(projections)
+                if proj_max - proj_min > 1e-6:
+                    t = (projections - proj_min) / (proj_max - proj_min)
+                else:
+                    t = np.zeros_like(projections)
+                
+                # Scale: tip moves most, root moves least
+                scale_factor = value  # value is the scale (e.g., 1.2 for 20% increase)
+                deltas = (scale_factor - 1.0) * t[:, np.newaxis] * (axis * extents[axis_idx])
+                verts_part = verts_part + deltas
+        
+        elif "offset" in operation:
+            # Translate along axis
+            offset = value * axis  # value is the offset distance
+            verts_part = verts_part + offset
+        
+        else:
+            # Unknown operation, skip
+            return verts
+        
+        # Apply changes back
+        verts_deformed = verts.copy()
+        verts_deformed[part_vertex_indices] = verts_part
         
         return verts_deformed
 

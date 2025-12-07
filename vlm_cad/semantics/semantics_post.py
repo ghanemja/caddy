@@ -29,6 +29,7 @@ def refine_parameters_with_vlm(
     raw_parameters: List[RawParameter],
     vlm: VLMClient,
     part_labels: Optional[List[str]] = None,
+    part_table: Optional["PartTable"] = None,
 ) -> PostVLMOutput:
     """
     Use the VLM to propose semantic names for generic raw parameters (p1, p2, ...).
@@ -106,9 +107,19 @@ Your tasks:
     
     raw_params_str = json.dumps(raw_params_data, indent=2)
     
-    # Build part labels info
+    # Build part labels info - prioritize user-provided labels from PartTable
     part_info = ""
-    if part_labels:
+    if part_table:
+        # Use user-provided labels from PartTable
+        named_parts = part_table.get_named_parts()
+        if named_parts:
+            part_names = [f"{name} (part_id: {info.part_id})" for name, info in named_parts.items()]
+            part_info = f"\nUser-labeled parts: {', '.join(part_names)}"
+        else:
+            # Fallback to part IDs if no names assigned
+            part_ids = [str(pid) for pid in part_table.get_part_ids()]
+            part_info = f"\nDetected parts (IDs): {', '.join(part_ids)}"
+    elif part_labels:
         part_info = f"\nDetected parts: {', '.join(part_labels)}"
     elif raw_parameters:
         # Extract unique part labels from raw parameters

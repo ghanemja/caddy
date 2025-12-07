@@ -1,8 +1,11 @@
 """
 Shared dataclasses and types for the semantics pipeline.
 """
-from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..parts.parts import PartTable
 
 
 @dataclass

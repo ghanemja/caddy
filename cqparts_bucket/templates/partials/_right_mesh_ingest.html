@@ -5,16 +5,40 @@
   </header>
   <div class="section-body">
     <p style="font-size: 12px; color: #64748b; margin-bottom: 12px;">
-      Upload a 3D mesh (OBJ/STL/PLY) to extract semantic parameters using PointNet++ and VLM.
+      Upload a 3D mesh (OBJ/STL/PLY) or CadQuery file (.py) to extract semantic parameters. Step 1: Segmentation, Step 2: Label parts, Step 3: VLM analysis.
     </p>
+    <div class="row" style="margin-bottom: 8px;">
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer;">
+        <input type="checkbox" id="isCadQueryFile" style="cursor: pointer;" />
+        <span>CadQuery file (.py)</span>
+      </label>
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; margin-left: 12px;">
+        <input type="checkbox" id="isCADFile" checked style="cursor: pointer;" />
+        <span>CAD/Mesh file (.obj/.stl/.ply)</span>
+      </label>
+    </div>
     <div class="row">
-      <input id="meshFile" type="file" accept=".obj,.stl,.ply" />
+      <input id="meshFile" type="file" accept=".obj,.stl,.ply,.py" />
       <button id="clearMesh">Clear</button>
     </div>
+    <div class="row" style="margin-top: 8px;">
+      <button id="loadDemoSTL" style="width: 100%; padding: 6px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Load Demo STL</button>
+    </div>
     <div class="row">
-      <button id="ingestMesh" style="width: 100%; margin-top: 8px;">Analyze Mesh</button>
+      <button id="ingestMesh" style="width: 100%; margin-top: 8px;">Step 1: Segment Mesh</button>
     </div>
     <div id="meshIngestStatus" style="font-size: 12px; color: #64748b; margin-top: 8px;"></div>
+    
+    <!-- Part Labeling UI (shown after segmentation) -->
+    <div id="partLabelingSection" style="margin-top: 16px; display: none;">
+      <h4 style="font-size: 14px; margin-bottom: 8px;">Label Parts</h4>
+      <p style="font-size: 11px; color: #64748b; margin-bottom: 8px;">
+        Assign semantic names to each part (e.g., "backrest", "seat", "wheel"). These will be used by the VLM.
+      </p>
+      <div id="partLabelingList" style="max-height: 300px; overflow-y: auto; margin-bottom: 12px;"></div>
+      <button id="submitLabels" style="width: 100%; margin-top: 8px; display: none;">Step 2: Submit Labels & Run VLM</button>
+    </div>
+    
     <div id="meshIngestResults" style="margin-top: 12px; display: none;">
       <h4 style="font-size: 14px; margin-bottom: 8px;">Results</h4>
       <div id="meshCategory" style="font-weight: bold; margin-bottom: 8px;"></div>
@@ -22,4 +46,3 @@
     </div>
   </div>
 </div>
-

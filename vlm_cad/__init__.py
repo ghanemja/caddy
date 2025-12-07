@@ -14,10 +14,14 @@ __version__ = "0.1.0"
 from . import pointnet_seg
 from . import semantics
 from . import mesh_deform
+from . import segmentation
+from . import parts
 
 __all__ = [
     "pointnet_seg",
     "semantics",
     "mesh_deform",
+    "segmentation",
+    "parts",
 ]
 

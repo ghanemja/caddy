@@ -16,9 +16,9 @@ from pathlib import Path
 import os
 import numpy as np
 
-from ..pointnet_seg.model import PointNet2PartSegWrapper
-from ..pointnet_seg.mesh_io import load_mesh_as_point_cloud
-from ..pointnet_seg.inference import segment_mesh
+# Use segmentation abstraction layer
+from ..segmentation import create_segmentation_backend, PartSegmentationBackend
+from ..parts.parts import build_part_table_from_segmentation
 from ..pointnet_seg.geometry import (
     compute_part_bounding_boxes,
     compute_part_statistics,
@@ -236,7 +236,7 @@ def _extract_raw_parameters(
 def ingest_mesh_to_semantic_params(
     mesh_path: str,
     vlm: "VLMClient",
-    model: "PointNet2PartSegWrapper",
+    model: "PartSegmentationBackend | PointNet2PartSegWrapper",  # Backward compat
     render_output_dir: str,
     num_points: int = 2048,
 ) -> "IngestResult":
@@ -267,17 +267,74 @@ def ingest_mesh_to_semantic_params(
     print(f"[Ingest] Category: {pre_output.category}", flush=True)
     print(f"[Ingest] Candidate parameters: {len(pre_output.candidate_parameters)}", flush=True)
     
-    # Step 3: PointNet++ segmentation
-    print(f"[Ingest] Running PointNet++ segmentation...", flush=True)
-    seg_result = segment_mesh(
-        mesh_path,
-        model,
-        num_points=num_points,
-        return_logits=False,
+    # Step 3: Part segmentation (using abstraction layer)
+    print(f"[Ingest] Running part segmentation...", flush=True)
+    
+    # Handle backward compatibility: if model is PointNet2PartSegWrapper, wrap it
+    from ..segmentation.backends import PartSegmentationBackend, PointNetSegmentationBackend
+    if not isinstance(model, PartSegmentationBackend):
+        # Legacy: wrap PointNet2PartSegWrapper
+        print("[Ingest] Wrapping legacy PointNet model in backend abstraction", flush=True)
+        backend = PointNetSegmentationBackend.__new__(PointNetSegmentationBackend)
+        backend.model = model
+        backend.device = model.device
+        backend.use_normals = model.use_normals
+        backend.segment = lambda mp, **kw: _legacy_segment_mesh(mp, model, **kw)
+    else:
+        backend = model
+    
+    # Run segmentation
+    seg_result = backend.segment(mesh_path, num_points=num_points)
+    
+    # Extract points and labels from result
+    if seg_result.points is not None:
+        points = seg_result.points
+    else:
+        # If no points, we need to sample them for geometry extraction
+        from ..pointnet_seg.mesh_io import load_mesh_as_point_cloud
+        points, _ = load_mesh_as_point_cloud(mesh_path, num_points=num_points, normalize=True)
+    
+    labels = seg_result.labels
+    print(f"[Ingest] Segmented into {seg_result.num_parts} parts", flush=True)
+    
+    # Build PartTable from segmentation
+    # For Hunyuan3D-Part, we should have vertex_labels; for PointNet, we use point labels
+    # Load full mesh to get vertices for PartTable
+    import trimesh
+    mesh = trimesh.load(mesh_path)
+    if isinstance(mesh, trimesh.Scene):
+        mesh = mesh.dump(concatenate=True)
+    vertices = np.array(mesh.vertices, dtype=np.float32)
+    
+    # Use vertex_labels if available, otherwise map point labels to vertices
+    if seg_result.vertex_labels is not None:
+        vertex_labels = seg_result.vertex_labels
+    elif seg_result.vertices is not None:
+        # If we have original vertices, use point labels directly
+        vertex_labels = seg_result.labels
+    else:
+        # Fallback: map point labels to vertices using nearest neighbors
+        # For now, use point labels (will be approximate)
+        print("[Ingest] Warning: No vertex labels available, using point labels as approximation")
+        vertex_labels = seg_result.labels
+    
+    # Ensure vertex_labels matches vertex count
+    if len(vertex_labels) != len(vertices):
+        # Truncate or pad to match
+        if len(vertex_labels) < len(vertices):
+            # Repeat last label
+            vertex_labels = np.pad(vertex_labels, (0, len(vertices) - len(vertex_labels)), mode='edge')
+        else:
+            vertex_labels = vertex_labels[:len(vertices)]
+    
+    # Build PartTable
+    print(f"[Ingest] Building part metadata table...", flush=True)
+    part_table = build_part_table_from_segmentation(
+        vertices=vertices,
+        part_labels=vertex_labels,
+        ground_plane_z=None,  # Auto-detect
     )
-    points = seg_result["points"]
-    labels = seg_result["labels"]
-    print(f"[Ingest] Segmented into {len(np.unique(labels))} parts", flush=True)
+    print(f"[Ingest] ✓ PartTable created with {len(part_table.parts)} parts", flush=True)
     
     # Step 4: Extract raw geometric parameters
     print(f"[Ingest] Extracting raw geometric parameters...", flush=True)
@@ -297,6 +354,7 @@ def ingest_mesh_to_semantic_params(
         raw_parameters,
         vlm,
         part_labels=part_labels,
+        part_table=part_table,  # Pass PartTable for VLM context
     )
     print(f"[Ingest] Proposed semantic parameters: {len(post_output.final_parameters)}", flush=True)
     
@@ -307,6 +365,7 @@ def ingest_mesh_to_semantic_params(
         proposed_parameters=post_output.final_parameters,  # Proposed semantic names
         pre_output=pre_output,
         post_output=post_output,
+        part_table=part_table,  # Include PartTable for part metadata
         extra={
             "num_points": len(points),
             "num_parts": len(np.unique(labels)),
@@ -371,6 +430,11 @@ def build_deformer_from_ingest_result(
     # Create mesh data
     mesh_data = MeshData(vertices=vertices, faces=faces)
     
+    # Use PartTable if available
+    part_table = None
+    if ingest_result.part_table is not None:
+        part_table = ingest_result.part_table
+    
     # Create and return deformer
     return ParametricMeshDeformer(
         base_mesh=mesh_data,
@@ -378,5 +442,6 @@ def build_deformer_from_ingest_result(
         part_labels=part_labels,
         part_label_names=part_label_names,
         config=config,
+        part_table=part_table,
     )
 

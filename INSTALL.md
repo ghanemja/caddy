@@ -228,18 +228,24 @@ If VLM generation is slow:
 
 After installation:
 
-1. **Test the installation:**
+1. **Test PointNet++ segmentation (web interface):**
+   ```bash
+   python test_pointnet_web.py
+   ```
+   Then open http://localhost:5001 in your browser to upload and test mesh files.
+
+2. **Test the full pipeline:**
    ```bash
    python test_analyze_mesh.py
    ```
 
-2. **Run the GUI server:**
+3. **Run the GUI server:**
    ```bash
    cd cqparts_bucket
    python optim.py
    ```
 
-3. **Read the documentation:**
+4. **Read the documentation:**
    - `README.md` - General overview
    - `DEV_NOTES_POINTNET_VLM.md` - Technical details
    - `setup.txt` - PointNet++ model setup
