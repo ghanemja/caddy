@@ -787,6 +787,63 @@ async function loadModel() {
     }
 }
 
+// Load STL/PLY/OBJ mesh files into the viewer
+// Uses server endpoint to convert mesh to GLB format
+async function loadMeshFile(file, filename) {
+    try {
+        clearScene();
+        logLine(`Loading mesh file: ${filename}...`);
+        
+        // Upload file to server and get GLB back
+        const formData = new FormData();
+        formData.append('mesh', file);
+        
+        const response = await fetch('/convert_mesh_to_glb', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) {
+            throw new Error(`Failed to convert mesh: ${response.statusText}`);
+        }
+        
+        const blob = await response.blob();
+        const glbUrl = URL.createObjectURL(blob);
+        
+        // Load GLB using existing GLTFLoader
+        const loader = new GLTFLoader();
+        await new Promise((res, rej) => {
+            loader.load(
+                glbUrl,
+                (g) => {
+                    group = g.scene;
+                    group.rotation.x = -Math.PI / 2; // Z-up → Y-up
+                    setDefaultIfMissing(group);
+                    pivot.add(group);
+                    buildClassRegistry(group);
+                    colorizeByClass();
+                    placeLabels();
+                    syncSidebar();
+                    fit();
+                    saveBaselineCam();
+                    logLine(`Mesh loaded: ${filename}`);
+                    URL.revokeObjectURL(glbUrl); // Clean up
+                    res();
+                },
+                undefined,
+                (err) => {
+                    URL.revokeObjectURL(glbUrl); // Clean up on error
+                    rej(err);
+                }
+            );
+        });
+    } catch (e) {
+        console.error("[loadMeshFile] Error:", e);
+        logLine(`Failed to load mesh: ${e.message}`, "err");
+        throw e;
+    }
+}
+
 // Camera controls wiring
 fov.oninput = () => {
     camera.fov = +fov.value;
