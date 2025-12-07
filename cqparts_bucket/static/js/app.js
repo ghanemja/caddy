@@ -896,8 +896,8 @@ async function loadDemoImage() {
     }
     
     if (loadDemoBtn) {
-      loadDemoBtn.textContent = '✓ Loaded';
-      loadDemoBtn.style.background = '#10b981';
+      loadDemoBtn.textContent = 'Loaded';
+      loadDemoBtn.style.background = '#5f476e';
       setTimeout(() => {
         if (loadDemoBtn) {
           loadDemoBtn.textContent = 'Load Demo';
@@ -906,11 +906,11 @@ async function loadDemoImage() {
       }, 2000);
     }
     
-    logLine('✓ Demo image loaded: Mars Rover');
+    logLine('Demo image loaded: Mars Rover');
   } catch (e) {
     console.error('Failed to load demo image:', e);
     const errorMsg = 'Failed to load demo image: ' + e.message;
-    logLine('⚠ ' + errorMsg, 'err');
+    logLine('Error: ' + errorMsg, 'err');
     if (loadDemoBtn) {
       loadDemoBtn.textContent = 'Error';
       loadDemoBtn.style.background = '#ef4444';
@@ -969,33 +969,72 @@ copyCodeBtn.addEventListener('click', async () => {
   }
 });
 
+// Handle codegen button - check which mode we're in
 btn.addEventListener('click', async () => {
-  if (!refEl.files[0]) { 
-    alert('Pick a reference image first.'); 
-    return; 
-  }
+  // Check if we're in natural language mode (step 4)
+  const naturalLanguageMode = document.getElementById('naturalLanguageMode');
+  const isStep4Mode = naturalLanguageMode && naturalLanguageMode.style.display !== 'none';
   
-  const fd = new FormData();
-  fd.append('reference', refEl.files[0]);
+  // Get the appropriate prompt element
+  const activePrompt = isStep4Mode 
+    ? document.getElementById('prompt') // Step 4 natural language prompt
+    : promptEl; // Step 1 prompt (legacy)
   
-  // Automatically capture current model snapshot from canvas
-  try {
-    const snapBlob = await snapshotCanvasToBlob();
-    if (snapBlob) {
-      fd.append('snapshot', new File([snapBlob], 'snapshot.png', { type: 'image/png' }));
-      logLine('✓ Captured current model snapshot automatically');
+  let fd = new FormData();
+  
+  if (isStep4Mode) {
+    // Step 4: Natural language mode - no image required
+    if (!activePrompt || !activePrompt.value.trim()) {
+      alert('Please enter instructions for modifying the shape.');
+      return;
     }
-  } catch (e) {
-    console.warn('Failed to capture snapshot:', e);
-    logLine('⚠ Could not capture snapshot, continuing without it', 'warn');
+    
+    // Automatically capture current model snapshot from canvas
+    try {
+      const snapBlob = await snapshotCanvasToBlob();
+      if (snapBlob) {
+        fd.append('snapshot', new File([snapBlob], 'snapshot.png', { type: 'image/png' }));
+        logLine('Captured current model snapshot automatically');
+      }
+    } catch (e) {
+      console.warn('Failed to capture snapshot:', e);
+      logLine('Warning: Could not capture snapshot, continuing without it', 'warn');
+    }
+    
+    fd.append('prompt', activePrompt.value || '');
+  } else {
+    // Step 1: Legacy mode - image required
+    if (!refEl.files[0]) { 
+      alert('Pick a reference image first.'); 
+      return; 
+    }
+    
+    fd.append('reference', refEl.files[0]);
+    
+    // Automatically capture current model snapshot from canvas
+    try {
+      const snapBlob = await snapshotCanvasToBlob();
+      if (snapBlob) {
+        fd.append('snapshot', new File([snapBlob], 'snapshot.png', { type: 'image/png' }));
+        logLine('Captured current model snapshot automatically');
+      }
+    } catch (e) {
+      console.warn('Failed to capture snapshot:', e);
+      logLine('Warning: Could not capture snapshot, continuing without it', 'warn');
+    }
+    
+    fd.append('prompt', activePrompt.value || '');
   }
   
-  fd.append('prompt', promptEl.value || '');
-
   btn.disabled = true;
   btn.textContent = 'Generating…';
-  codegenStatus.textContent = 'Generating code...';
-  codegenStatus.style.color = '#f59e0b';
+  const statusEl = isStep4Mode 
+    ? document.getElementById('codegenStatus')
+    : codegenStatus;
+  if (statusEl) {
+    statusEl.textContent = 'Generating code...';
+    statusEl.style.color = '#f59e0b';
+  }
   
   const loading = startLoadingLine('Generating code from VLM');
   
@@ -1008,7 +1047,7 @@ btn.addEventListener('click', async () => {
       
       // Show detailed validation errors if available
       if (json.validation_failed) {
-        logLine('✗ Generated code failed validation:', 'err');
+        logLine('Generated code failed validation:', 'err');
         logLine(`  ${json.checks_failed} critical checks failed`, 'err');
         logLine(`  Expected: ${json.expected_length}, Got: ${json.actual_lines} lines`, 'err');
         
@@ -1024,7 +1063,7 @@ btn.addEventListener('click', async () => {
         
         codegenStatus.textContent = `Validation failed (${json.checks_failed} issues)`;
       } else {
-        logLine(`✗ Error: ${json.error}`, 'err');
+        logLine(`Error: ${json.error}`, 'err');
         codegenStatus.textContent = 'Code generation failed';
       }
       
@@ -1035,35 +1074,45 @@ btn.addEventListener('click', async () => {
     
     // Display the generated code
     if (json.code) {
-      codegenText.value = json.code;
-      codegenOutput.style.display = 'block';
+      const outputEl = isStep4Mode 
+        ? document.getElementById('codegenOutput')
+        : codegenOutput;
+      const textEl = isStep4Mode
+        ? document.getElementById('codegenText')
+        : codegenText;
+      if (textEl) textEl.value = json.code;
+      if (outputEl) outputEl.style.display = 'block';
       
       const lines = json.code.split('\n').length;
-      logLine(`✓ Code generated: ${lines} lines, ${json.code_length} chars`);
+      logLine(`Code generated: ${lines} lines, ${json.code_length} chars`);
     }
     
     // Update status
-    codegenStatus.textContent = `Code generated (${json.code_length} chars)`;
-    codegenStatus.style.color = '#10b981';
+    if (statusEl) {
+      statusEl.textContent = `Code generated (${json.code_length} chars)`;
+      statusEl.style.color = '#5f476e';
+    }
     
     // Refresh the 3D model with new code if GLB was rebuilt
     if (json.glb_updated) {
       logLine('Rebuilding 3D model with generated code...');
       await refreshModel();
       loading.stop('ok', 'Code generated and model updated');
-      logLine('✓ 3D model updated with new code');
+      logLine('3D model updated with new code');
     } else {
       loading.stop('warn', 'Code generated but model rebuild failed');
-      logLine('⚠ Model rebuild failed - check console for errors', 'warn');
+      logLine('Warning: Model rebuild failed - check console for errors', 'warn');
     }
     
-    btn.textContent = 'Generate Code ✓';
+    btn.textContent = 'Generate Code';
   } catch (e) {
     console.error(e);
-    codegenStatus.textContent = 'Code generation failed';
-    codegenStatus.style.color = '#ef4444';
+        if (statusEl) {
+          statusEl.textContent = 'Code generation failed';
+          statusEl.style.color = '#ef4444';
+        }
     loading.stop('err', `Error: ${e.message}`);
-    logLine(`✗ Error: ${e.message}`, 'err');
+    logLine(`Error: ${e.message}`, 'err');
     btn.textContent = 'Generate Code (retry)';
   } finally {
     btn.disabled = false;
@@ -1207,8 +1256,8 @@ async function applyVLMJson(jsonObj) {
         const changed = after.size.some((v, i) => Math.abs(v - before.size[i]) > 0.5);
         logLine(
             changed
-                ? "Geometry size changed ✅"
-                : "No size change detected ⚠️ (may be translation-only).",
+                ? "Geometry size changed"
+                : "No size change detected (may be translation-only).",
             changed ? "ok" : "warn"
         );
     }
@@ -1549,13 +1598,13 @@ if (loadDemoSTLBtn) {
             // Trigger change event
             meshFile.dispatchEvent(new Event('change', { bubbles: true }));
             
-            logLine('✓ Loaded demo Curiosity Rover STL file', 'ok');
-            loadDemoSTLBtn.textContent = '✓ Loaded Demo STL';
-            loadDemoSTLBtn.style.background = '#10b981';
+            logLine('Loaded demo Curiosity Rover STL file', 'ok');
+            loadDemoSTLBtn.textContent = 'Loaded Demo STL';
+            loadDemoSTLBtn.style.background = '#5f476e';
             
             setTimeout(() => {
                 loadDemoSTLBtn.textContent = 'Load Demo STL';
-                loadDemoSTLBtn.style.background = '#10b981';
+                loadDemoSTLBtn.style.background = '#5f476e';
                 loadDemoSTLBtn.disabled = false;
             }, 2000);
         } catch (e) {
@@ -1589,7 +1638,7 @@ if (ingestMesh) {
         
         if (isCadQuery && file.name.endsWith('.py')) {
             // Handle CadQuery file upload
-            if (meshIngestStatus) {
+        if (meshIngestStatus) {
                 meshIngestStatus.textContent = 'CadQuery file upload - processing...';
                 meshIngestStatus.style.color = '#64748b';
             }
@@ -1633,17 +1682,27 @@ if (ingestMesh) {
 
             // Display segmentation results (step 1 complete)
             if (meshIngestStatus) {
-                meshIngestStatus.textContent = `✓ Segmentation complete! Found ${result.segmentation?.num_parts || 0} parts. Please label them below.`;
-                meshIngestStatus.style.color = '#059669';
+                meshIngestStatus.textContent = `Segmentation complete! Found ${result.segmentation?.num_parts || 0} parts. Please label them below.`;
+                meshIngestStatus.style.color = '#7C3AED';
             }
 
-            // Show part labeling UI
+            // Show part labeling UI in Confirm Parameters section (step 3)
             const partLabelingSection = document.getElementById('partLabelingSection');
             const partLabelingList = document.getElementById('partLabelingList');
+            const partIdsDisplay = document.getElementById('partIdsDisplay');
             const submitLabelsBtn = document.getElementById('submitLabels');
+            const confirmParamsEmpty = document.getElementById('confirmParamsEmpty');
             
             if (partLabelingSection && partLabelingList && result.part_table) {
                 partLabelingSection.style.display = 'block';
+                if (confirmParamsEmpty) confirmParamsEmpty.style.display = 'none';
+                
+                // Display part IDs for visualization
+                if (partIdsDisplay) {
+                    const parts = result.part_table.parts || [];
+                    const partIds = parts.map(p => `Part ${p.part_id}`).join(', ');
+                    partIdsDisplay.textContent = partIds || 'No parts found';
+                }
                 
                 // Build labeling UI
                 let html = '';
@@ -1654,9 +1713,12 @@ if (ingestMesh) {
                     const shapeHint = part.shape_hint || 'unknown';
                     const touchesGround = part.touches_ground ? ' (touches ground)' : '';
                     
-                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #f8fafc; border-radius: 4px; border-left: 3px solid #3b82f6;">`;
-                    html += `<div style="font-weight: 600; margin-bottom: 4px;">Part ${partId} <span style="color: #64748b; font-size: 11px;">(${shapeHint}${touchesGround})</span></div>`;
-                    html += `<input type="text" id="part_label_${partId}" value="${currentName}" placeholder="Enter semantic name (e.g., backrest)" style="width: 100%; padding: 4px; border: 1px solid #cbd5e1; border-radius: 3px; font-size: 12px;" />`;
+                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #ebd2fa; border-radius: 4px; border-left: 3px solid #5f476e;">`;
+                    html += `<div style="font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">`;
+                    html += `<span style="background: #5f476e; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">ID: ${partId}</span>`;
+                    html += `<span style="color: #64748b; font-size: 11px;">${shapeHint}${touchesGround}</span>`;
+                    html += `</div>`;
+                    html += `<input type="text" id="part_label_${partId}" value="${currentName}" placeholder="Enter semantic name (e.g., backrest)" style="width: 100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; margin-top: 4px;" />`;
                     html += `</div>`;
                 });
                 partLabelingList.innerHTML = html;
@@ -1664,12 +1726,21 @@ if (ingestMesh) {
                 if (submitLabelsBtn) {
                     submitLabelsBtn.style.display = 'block';
                 }
+                
+                // Move to step 3 when labeling UI is shown (collapse step 2, expand step 3)
+                if (window.updateStepState) {
+                    window.updateStepState(3);
+                }
+                
+                // Scroll to part labeling section
+                partLabelingSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             }
 
             // Update button text for next step
             if (ingestMesh) {
-                ingestMesh.textContent = 'Step 1: Segment Mesh (Done ✓)';
+                ingestMesh.textContent = 'Segment Mesh (Done)';
                 ingestMesh.disabled = false;
+                ingestMesh.style.background = '#5f476e';
             }
 
             // Log to console
@@ -1678,7 +1749,7 @@ if (ingestMesh) {
 
         } catch (e) {
             if (meshIngestStatus) {
-                meshIngestStatus.textContent = `✗ Error: ${e.message}`;
+                meshIngestStatus.textContent = `Error: ${e.message}`;
                 meshIngestStatus.style.color = '#dc2626';
             }
             console.error('[mesh_ingest] Error:', e);
@@ -1747,18 +1818,21 @@ if (submitLabelsBtn) {
 
             // Display results
             if (meshIngestStatus) {
-                meshIngestStatus.textContent = '✓ Analysis complete!';
-                meshIngestStatus.style.color = '#059669';
+                meshIngestStatus.textContent = 'Analysis complete!';
+                meshIngestStatus.style.color = '#5f476e';
             }
 
-            if (meshCategory) {
+            // Populate confirm params section (step 3)
+            const confirmParamsContent = document.getElementById('confirmParamsContent');
+            const confirmParamsEmpty = document.getElementById('confirmParamsEmpty');
+            const confirmParamsCategory = document.getElementById('confirmParamsCategory');
+            const confirmParamsList = document.getElementById('confirmParamsList');
+            
+            if (confirmParamsContent && confirmParamsCategory && confirmParamsList) {
                 const category = result.category || 'Unknown';
-                meshCategory.textContent = `Category: ${category}`;
-            }
-
-            if (meshParameters) {
-                let html = '';
+                confirmParamsCategory.textContent = `Category: ${category}`;
                 
+                let html = '';
                 const proposedParams = result.proposed_parameters || result.final_parameters || [];
                 if (proposedParams.length > 0) {
                     html += '<div style="margin-bottom: 12px;"><strong>Proposed Semantic Parameters:</strong></div>';
@@ -1788,10 +1862,51 @@ if (submitLabelsBtn) {
                         html += `</div>`;
                     });
                 }
-
+                
+                confirmParamsList.innerHTML = html;
+                confirmParamsContent.style.display = 'block';
+                if (confirmParamsEmpty) confirmParamsEmpty.style.display = 'none';
+                
+                // Store result for later use
+                window.lastIngestResult = result;
+                
+                // Move to step 3
+                if (window.updateStepState) {
+                    window.updateStepState(3);
+                }
+                
+                // Populate direct parameter inputs in Step 4
+                populateDirectParams(result);
+            } else {
+                if (confirmParamsEmpty) confirmParamsEmpty.style.display = 'block';
+                if (confirmParamsContent) confirmParamsContent.style.display = 'none';
+            }
+            
+            // Legacy support for meshIngestResults (if it still exists)
+            if (meshCategory) {
+                const category = result.category || 'Unknown';
+                meshCategory.textContent = `Category: ${category}`;
+            }
+            if (meshParameters) {
+                let html = '';
+                const proposedParams = result.proposed_parameters || result.final_parameters || [];
+                if (proposedParams.length > 0) {
+                    html += '<div style="margin-bottom: 12px;"><strong>Proposed Semantic Parameters:</strong></div>';
+                    proposedParams.forEach(param => {
+                        const name = param.semantic_name || param.name || 'Unknown';
+                        const value = param.value !== undefined ? param.value : 'N/A';
+                        const units = param.units || '';
+                        const desc = param.description || '';
+                        html += `<div style="margin-bottom: 8px; padding: 8px; background: #f8fafc; border-radius: 4px;">`;
+                        html += `<strong>${name}</strong>: ${value} ${units}`;
+                        if (desc) html += `<br/><span style="font-size: 11px; color: #64748b;">${desc}</span>`;
+                        html += `</div>`;
+                    });
+                } else {
+                    html = '<div style="color: #94a3b8; font-style: italic;">No parameters extracted.</div>';
+                }
                 meshParameters.innerHTML = html;
             }
-
             if (meshIngestResults) meshIngestResults.style.display = 'block';
 
             // Log to console
@@ -1801,7 +1916,7 @@ if (submitLabelsBtn) {
 
         } catch (e) {
             if (meshIngestStatus) {
-                meshIngestStatus.textContent = `✗ Error: ${e.message}`;
+                meshIngestStatus.textContent = `Error: ${e.message}`;
                 meshIngestStatus.style.color = '#dc2626';
             }
             console.error('[mesh_ingest] Error:', e);
@@ -1810,6 +1925,19 @@ if (submitLabelsBtn) {
             submitLabelsBtn.disabled = false;
         }
     };
+}
+
+// Initialize iterate shape mode switching
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupIterateShapeMode);
+} else {
+    setupIterateShapeMode();
+}
+
+// Set up apply direct params button
+const applyDirectParamsBtn = document.getElementById('applyDirectParams');
+if (applyDirectParamsBtn) {
+    applyDirectParamsBtn.addEventListener('click', applyDirectParams);
 }
 
 // Parameter mapping popup functions
@@ -2184,4 +2312,169 @@ function setupResizablePanels() {
     panVal.textContent = (controls.panSpeed || 1).toFixed(2);
     dampVal.textContent = controls.dampingFactor.toFixed(2);
     await refreshParamsHint();
+    
+    // Step management system
+    initializeStepManagement();
 })();
+
+// Step Management System
+function initializeStepManagement() {
+    let currentStep = 1;
+    
+    // Update step state
+    function updateStepState(step) {
+        currentStep = step;
+        
+        // Update stepper
+        document.querySelectorAll('.step-item').forEach((item, index) => {
+            const stepNum = index + 1;
+            item.classList.remove('active', 'completed');
+            
+            if (stepNum < step) {
+                item.classList.add('completed');
+            } else if (stepNum === step) {
+                item.classList.add('active');
+            }
+        });
+        
+        // Update sections
+        document.querySelectorAll('[data-step]').forEach((section) => {
+            const sectionStep = parseInt(section.dataset.step);
+            section.classList.remove('step-active', 'step-inactive', 'step-completed');
+            
+            // Disable/enable proceed buttons
+            const proceedButtons = section.querySelectorAll('.proceed-button');
+            
+            if (sectionStep < step) {
+                section.classList.add('step-completed');
+                // Collapse completed steps
+                if (section.classList.contains('section')) {
+                    section.classList.add('collapsed');
+                    const toggle = section.querySelector('.toggle');
+                    if (toggle) toggle.textContent = 'Expand';
+                }
+                // Hide proceed buttons in completed steps
+                proceedButtons.forEach(btn => btn.style.display = 'none');
+            } else if (sectionStep === step) {
+                section.classList.add('step-active');
+                // Expand active step
+                if (section.classList.contains('section')) {
+                    section.classList.remove('collapsed');
+                    const toggle = section.querySelector('.toggle');
+                    if (toggle) toggle.textContent = 'Collapse';
+                }
+                // Show proceed buttons in active step (if they should be visible)
+                proceedButtons.forEach(btn => {
+                    // Only show if button has been made visible by action (e.g., file uploaded)
+                    // Don't force show, let the action handlers control visibility
+                });
+            } else {
+                section.classList.add('step-inactive');
+                // Collapse inactive steps
+                if (section.classList.contains('section')) {
+                    section.classList.add('collapsed');
+                    const toggle = section.querySelector('.toggle');
+                    if (toggle) toggle.textContent = 'Expand';
+                }
+                // Hide proceed buttons in inactive steps
+                proceedButtons.forEach(btn => btn.style.display = 'none');
+            }
+        });
+    }
+    
+    // File input handlers
+    const refInput = document.getElementById('ref');
+    const refFileName = document.getElementById('refFileName');
+    const proceedToStep2Btn = document.getElementById('proceedToStep2');
+    if (refInput && refFileName) {
+        refInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                refFileName.textContent = file.name;
+                // Show proceed button
+                if (proceedToStep2Btn) {
+                    proceedToStep2Btn.style.display = 'block';
+                }
+            } else {
+                refFileName.textContent = 'No file chosen';
+                if (proceedToStep2Btn) {
+                    proceedToStep2Btn.style.display = 'none';
+                }
+            }
+        });
+    }
+    
+    // Proceed button handlers
+    if (proceedToStep2Btn) {
+        proceedToStep2Btn.addEventListener('click', () => {
+            updateStepState(2);
+        });
+    }
+    
+    const meshFileInput = document.getElementById('meshFile');
+    const meshFileName = document.getElementById('meshFileName');
+    if (meshFileInput && meshFileName) {
+        meshFileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                meshFileName.textContent = file.name;
+            } else {
+                meshFileName.textContent = 'No file chosen';
+            }
+        });
+    }
+    
+    // Handle confirm params button (proceed to step 4)
+    const confirmParamsBtn = document.getElementById('confirmParamsBtn');
+    if (confirmParamsBtn) {
+        confirmParamsBtn.addEventListener('click', () => {
+            // Move to step 4
+            updateStepState(4);
+            // Ensure direct params are populated if they weren't already
+            const directParamsList = document.getElementById('directParamsList');
+            if (directParamsList && directParamsList.innerHTML.includes('No parameters')) {
+                // Try to get parameters from confirmParamsContent
+                const confirmParamsList = document.getElementById('confirmParamsList');
+                if (confirmParamsList && window.lastIngestResult) {
+                    populateDirectParams(window.lastIngestResult);
+                }
+            }
+        });
+    }
+    
+    // Handle proceed to step 3 button
+    const proceedToStep3Btn = document.getElementById('proceedToStep3');
+    if (proceedToStep3Btn) {
+        proceedToStep3Btn.addEventListener('click', () => {
+            // Collapse step 2 and expand step 3
+            updateStepState(3);
+        });
+    }
+    
+    // Stepper click handlers
+    document.querySelectorAll('.step-item').forEach((item) => {
+        item.addEventListener('click', () => {
+            const step = parseInt(item.dataset.step);
+            if (step <= currentStep || step === currentStep + 1) {
+                updateStepState(step);
+            }
+        });
+    });
+    
+    // Initialize: collapse all sections except step 1
+    document.querySelectorAll('[data-step]').forEach((section) => {
+        const sectionStep = parseInt(section.dataset.step);
+        if (sectionStep !== 1 && section.classList.contains('section')) {
+            section.classList.add('collapsed');
+            const toggle = section.querySelector('.toggle');
+            if (toggle) toggle.textContent = 'Expand';
+        }
+    });
+    
+    // Initialize to step 1 (this will expand step 1 and collapse others)
+    updateStepState(1);
+    
+    // Expose updateStepState for external use
+    window.updateStepState = updateStepState;
+    window.getCurrentStep = () => currentStep;
+}

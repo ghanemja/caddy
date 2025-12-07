@@ -1,6 +1,6 @@
 <!-- Parameter Mapping Popup -->
-<div id="paramMappingPopup" style="display: none; position: fixed; top: 20px; right: 20px; width: 400px; max-height: 80vh; background: white; border: 2px solid #3b82f6; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); z-index: 10000; overflow: hidden;">
-  <div style="background: #3b82f6; color: white; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center;">
+<div id="paramMappingPopup" style="display: none; position: fixed; top: 20px; right: 20px; width: 400px; max-height: 80vh; background: white; border: 2px solid #5f476e; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); z-index: 10000; overflow: hidden;">
+  <div style="background: #5f476e; color: white; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center;">
     <h3 style="margin: 0; font-size: 16px;">Parameter Mapping</h3>
     <button id="closeParamPopup" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 24px; height: 24px; border-radius: 4px; cursor: pointer; font-size: 18px; line-height: 1;">×</button>
   </div>
@@ -21,8 +21,8 @@
       
       <div style="border-top: 1px solid #e2e8f0; padding-top: 12px; margin-top: 12px;">
         <div style="display: flex; gap: 8px;">
-          <button id="applyParams" style="flex: 1; padding: 10px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Apply Parameters</button>
-          <button id="useVLMForParams" style="flex: 1; padding: 10px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Use VLM Instructions</button>
+          <button id="applyParams" style="flex: 1; padding: 10px; background: #5f476e; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Apply Parameters</button>
+          <button id="useVLMForParams" style="flex: 1; padding: 10px; background: #5f476e; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Use VLM Instructions</button>
         </div>
         <div style="margin-top: 8px;">
           <textarea id="vlmParamInstructions" placeholder="Describe parameter changes (e.g., 'Make wing_span 2.5m, reduce chord_length to 0.25m')" style="width: 100%; min-height: 60px; padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 12px; display: none;"></textarea>

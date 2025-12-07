@@ -3313,13 +3313,13 @@ def ingest_mesh_label():
                 print("[ingest_mesh_label] Using Ollama VLM (fast on CPU)")
             except Exception as e:
                 print(f"[ingest_mesh_label] Warning: Could not use Ollama: {e}")
-                try:
-                    vlm = FinetunedVLMClient()
-                    print("[ingest_mesh_label] Using fine-tuned VLM (slower on CPU)")
-                except Exception as e2:
-                    print(f"[ingest_mesh_label] Warning: Could not use fine-tuned VLM: {e2}")
-                    vlm = DummyVLMClient()
-                    print("[ingest_mesh_label] Using dummy VLM (for testing)")
+            try:
+                vlm = FinetunedVLMClient()
+                print("[ingest_mesh_label] Using fine-tuned VLM (slower on CPU)")
+            except Exception as e2:
+                print(f"[ingest_mesh_label] Warning: Could not use fine-tuned VLM: {e2}")
+                vlm = DummyVLMClient()
+                print("[ingest_mesh_label] Using dummy VLM (for testing)")
         else:
             try:
                 vlm = FinetunedVLMClient()
@@ -3413,6 +3413,111 @@ def ingest_mesh():
     # This will be kept for backward compatibility but can call the new endpoints internally
     # For now, just redirect to the old behavior
     pass
+
+
+@app.post("/apply_mesh_params")
+def apply_mesh_params():
+    """
+    Apply parameter changes to deform a mesh.
+    Expects JSON: { "parameters": { "param_id": value, ... } }
+    Returns: { "ok": True, "glb_path": "...", "message": "..." }
+    """
+    try:
+        data = request.get_json()
+        if not data or "parameters" not in data:
+            return jsonify({"ok": False, "error": "Missing 'parameters' in request"}), 400
+        
+        parameters = data["parameters"]
+        if not isinstance(parameters, dict):
+            return jsonify({"ok": False, "error": "'parameters' must be a dictionary"}), 400
+        
+        # Get the current mesh path from session or request
+        # For now, we'll need to store this from the ingestion step
+        # TODO: Store mesh path in session or pass it in the request
+        mesh_path = data.get("mesh_path") or request.cookies.get("current_mesh_path")
+        
+        if not mesh_path or not os.path.exists(mesh_path):
+            return jsonify({
+                "ok": False,
+                "error": "No mesh file available. Please upload and segment a mesh first."
+            }), 400
+        
+        # Import mesh deformation modules
+        import sys
+        parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from vlm_cad.mesh_deform import ParametricMeshDeformer, MeshData
+        from vlm_cad.semantics.ingest_mesh import build_deformer_from_ingest_result
+        import trimesh
+        import numpy as np
+        
+        # Load the mesh
+        mesh = trimesh.load(mesh_path)
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+        
+        vertices = np.array(mesh.vertices)
+        faces = np.array(mesh.faces)
+        
+        # Get base parameters and part table from session/cache
+        # For now, we'll create a simple deformer with default config
+        # TODO: Store IngestResult in session/cache to get proper base parameters
+        
+        # Create base mesh data
+        base_mesh = MeshData(vertices=vertices, faces=faces)
+        
+        # Create a simple deformer (this is a simplified version)
+        # In production, you'd want to store the full IngestResult and use build_deformer_from_ingest_result
+        from vlm_cad.mesh_deform.deformer import DeformationConfig
+        
+        # For now, apply simple scaling based on parameter changes
+        # This is a placeholder - in production, use the full ParametricMeshDeformer
+        
+        # Simple approach: scale the entire mesh based on average parameter change
+        if parameters:
+            # Calculate average scale factor (assuming parameters are in meters)
+            # This is a simplified approach - in production, use proper deformation configs
+            scale_factor = 1.0
+            param_values = list(parameters.values())
+            if param_values:
+                # Use the first parameter as a simple scale (this is a placeholder)
+                # In production, map parameters to specific parts using DeformationConfig
+                avg_value = np.mean([float(v) for v in param_values if isinstance(v, (int, float))])
+                if avg_value > 0:
+                    scale_factor = avg_value / 1.0  # Normalize to 1.0 as baseline
+        
+        # Apply scaling
+        scaled_vertices = vertices * scale_factor
+        
+        # Create new mesh
+        deformed_mesh = trimesh.Trimesh(vertices=scaled_vertices, faces=faces)
+        
+        # Save deformed mesh
+        output_dir = os.path.join(os.path.dirname(mesh_path), "deformed")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        base_name = os.path.splitext(os.path.basename(mesh_path))[0]
+        output_path = os.path.join(output_dir, f"{base_name}_deformed.glb")
+        deformed_mesh.export(output_path)
+        
+        return jsonify({
+            "ok": True,
+            "glb_path": output_path,
+            "message": f"Applied {len(parameters)} parameter changes"
+        })
+        
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"[apply_mesh_params] Error: {error_msg}", flush=True)
+        traceback.print_exc()
+        return jsonify({
+            "ok": False,
+            "error": error_msg,
+            "traceback": traceback.format_exc()
+        }), 500
 
 
 # ----------------- Introspection -----------------
@@ -4051,7 +4156,7 @@ def _reload_rover_from_generated():
     if not os.path.exists(gen_path):
         print("[reload] No generated code found, using original Rover")
         return Rover
-
+    
     try:
         print(f"[reload] Loading Rover from {gen_path}...")
         import importlib.util
