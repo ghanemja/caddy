@@ -346,6 +346,8 @@ let group = null,
 const classMap = new Map(); // key -> { color:THREE.Color, nodes:Set<Object3D>, label:Sprite, count:number }
 let hovered = null,
     selectedClass = null;
+let hoveredPartId = null; // Currently hovered part ID
+let segmentationData = null; // Store segmentation data for part highlighting
 const origMats = new Map();
 
 // ---- Dynamic column sizing (fit content, within viewport limits)
@@ -1355,17 +1357,41 @@ if (sendVLM) {
     };
 }
 
-// Hover highlight by class (lightweight)
+// Hover highlight by class and part (lightweight)
 function updateHover() {
     if (!group) return;
     raycaster.setFromCamera(pointer, camera);
     const hits = raycaster.intersectObjects(group.children, true);
     let newHovered = null;
+    let newHoveredPartId = null;
+    
     if (hits.length) {
         let o = hits[0].object;
         while (o.parent && !o.name) o = o.parent;
         newHovered = classKeyFromName(o.name);
+        
+        // Determine which part this hit belongs to using spatial lookup
+        if (segmentationData && segmentationData.part_table && hits[0].point) {
+            const hitPoint = hits[0].point;
+            const parts = segmentationData.part_table.parts || [];
+            
+            // Find the part whose bounding box contains the hit point
+            for (const part of parts) {
+                const bboxMin = part.bbox_min || [0, 0, 0];
+                const bboxMax = part.bbox_max || [0, 0, 0];
+                
+                // Check if hit point is within bounding box (with some tolerance)
+                if (hitPoint.x >= bboxMin[0] - 0.1 && hitPoint.x <= bboxMax[0] + 0.1 &&
+                    hitPoint.y >= bboxMin[1] - 0.1 && hitPoint.y <= bboxMax[1] + 0.1 &&
+                    hitPoint.z >= bboxMin[2] - 0.1 && hitPoint.z <= bboxMax[2] + 0.1) {
+                    newHoveredPartId = part.part_id;
+                    break;
+                }
+            }
+        }
     }
+    
+    // Update class-based hover (existing functionality)
     if (hovered !== newHovered) {
         if (hovered && classMap.has(hovered) && hovered !== selectedClass) {
             const e = classMap.get(hovered);
@@ -1379,6 +1405,89 @@ function updateHover() {
             );
         }
     }
+    
+    // Update part-based hover (new functionality)
+    if (hoveredPartId !== newHoveredPartId) {
+        // Clear previous part highlight
+        if (hoveredPartId !== null) {
+            clearPartHighlight(hoveredPartId);
+        }
+        
+        hoveredPartId = newHoveredPartId;
+        
+        // Highlight new part and all instances with same ID
+        if (hoveredPartId !== null) {
+            highlightPart(hoveredPartId);
+            
+            // Show part info in status
+            if (segmentationData && segmentationData.part_table) {
+                const partInfo = segmentationData.part_table.parts?.find(p => p.part_id === hoveredPartId);
+                if (partInfo) {
+                    const partName = partInfo.name || partInfo.provisional_name || `Part ${hoveredPartId}`;
+                    nameEl.textContent = `${partName} (ID: ${hoveredPartId})`;
+                }
+            }
+        } else if (hoveredPartId === null && !hovered) {
+            nameEl.textContent = "—";
+        }
+    }
+}
+
+// Highlight a part and all instances with the same ID
+function highlightPart(partId) {
+    if (!group || !segmentationData) return;
+    
+    const parts = segmentationData.part_table?.parts || [];
+    const partInfo = parts.find(p => p.part_id === partId);
+    if (!partInfo) return;
+    
+    // Find all parts with the same ID (in case there are duplicates)
+    const matchingParts = parts.filter(p => p.part_id === partId);
+    
+    // Highlight all meshes that intersect with any of these parts' bounding boxes
+    group.traverse((obj) => {
+        if (obj.isMesh && obj.material) {
+            // Get mesh bounding box
+            const box = new THREE.Box3().setFromObject(obj);
+            const meshCenter = box.getCenter(new THREE.Vector3());
+            
+            // Check if mesh center is within any matching part's bounding box
+            for (const part of matchingParts) {
+                const bboxMin = part.bbox_min || [0, 0, 0];
+                const bboxMax = part.bbox_max || [0, 0, 0];
+                
+                if (meshCenter.x >= bboxMin[0] - 0.5 && meshCenter.x <= bboxMax[0] + 0.5 &&
+                    meshCenter.y >= bboxMin[1] - 0.5 && meshCenter.y <= bboxMax[1] + 0.5 &&
+                    meshCenter.z >= bboxMin[2] - 0.5 && meshCenter.z <= bboxMax[2] + 0.5) {
+                    
+                    // Store original emissive if not already stored
+                    if (!obj.userData.originalEmissive) {
+                        obj.userData.originalEmissive = obj.material.emissive.clone();
+                        obj.userData.originalEmissiveIntensity = obj.material.emissiveIntensity || 0;
+                    }
+                    
+                    // Apply hover highlight
+                    obj.material.emissive.copy(hoverEmissive);
+                    obj.material.emissiveIntensity = 0.6;
+                    obj.material.needsUpdate = true;
+                    break;
+                }
+            }
+        }
+    });
+}
+
+// Clear part highlight
+function clearPartHighlight(partId) {
+    if (!group) return;
+    
+    group.traverse((obj) => {
+        if (obj.isMesh && obj.material && obj.userData.originalEmissive) {
+            obj.material.emissive.copy(obj.userData.originalEmissive);
+            obj.material.emissiveIntensity = obj.userData.originalEmissiveIntensity || 0;
+            obj.material.needsUpdate = true;
+        }
+    });
 }
 
 // Undo/Redo
@@ -1640,8 +1749,7 @@ if (loadDemoSTLBtn) {
     };
 }
 
-// Store segmentation results for step 2
-let segmentationData = null;
+// Store segmentation results for step 2 (declared at top of file)
 
 if (ingestMesh) {
     ingestMesh.onclick = async () => {
