@@ -9,9 +9,7 @@
       <strong>What this does:</strong> Upload a reference image and generate/modify Python code to match it. The code will be saved and the 3D model will update.
     </div>
     
-    <div class="row" style="justify-content: space-between; margin-bottom: 8px">
-      <div id="codegenStatus" class="pill" style="opacity: 0.8">Ready</div>
-    </div>
+    <!-- Status moved to canvas overlay -->
     
     <div class="stack" style="margin-top: 12px">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px">
@@ -30,17 +28,11 @@
         <strong>✓ Current model snapshot</strong> will be captured automatically from the 3D viewer when you click "Generate Code"
       </div>
     </div>
+    
+    <!-- Mesh Ingestion Section (moved here from separate section) -->
+    {% include "partials/_right_mesh_ingest.html" %}
 
-    <div class="stack" style="margin-top: 12px">
-      <label><strong>Instructions</strong> (optional)</label>
-      <textarea
-        id="prompt"
-        placeholder="Describe what you want (e.g., 'Add 6 wheels total, 3 per side like in the image')"
-        style="width: 100%; min-height: 80px; padding: 8px; border: 1px solid #e5e7eb; border-radius: 8px; resize: vertical; font-size: 12px"
-      ></textarea>
-    </div>
-
-    <button id="btn-codegen" style="margin-top: 12px; width: 100%; text-align: center; padding: 10px; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600" class="btn">🚀 Generate Code</button>
+    <!-- Instructions and Generate Code button moved to canvas overlay -->
     
     <!-- Generated code display area -->
     <div id="codegenOutput" style="display: none; margin-top: 12px">
