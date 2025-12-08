@@ -3203,11 +3203,15 @@ def ingest_mesh_segment():
             print(f"[ingest_mesh_segment] Warning: Could not save visualization: {e}")
             segmentation_summary["visualization_path"] = None
         
+        # Include vertex labels for coloring (convert to list for JSON)
+        vertex_labels_list = vertex_labels.tolist() if hasattr(vertex_labels, 'tolist') else list(vertex_labels)
+        
         # Return segmentation results only (user will label parts, then call /ingest_mesh_label)
         response_data = {
             "ok": True,
             "segmentation": segmentation_summary,
             "part_table": part_table_json,
+            "vertex_labels": vertex_labels_list,  # Include vertex labels for coloring
             "mesh_path": mesh_path,  # Store for step 2 (VLM processing)
             "temp_dir": temp_dir,  # Keep temp dir for step 2
         }

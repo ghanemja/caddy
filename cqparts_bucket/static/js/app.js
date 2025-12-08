@@ -822,6 +822,12 @@ async function loadMeshFile(file, filename) {
                     group.rotation.x = -Math.PI / 2; // Z-up → Y-up
                     setDefaultIfMissing(group);
                     pivot.add(group);
+                    
+                    // Apply part colors if we have segmentation data
+                    if (segmentationData && segmentationData.part_table) {
+                        applyPartColorsToMesh(group, segmentationData);
+                    }
+                    
                     buildClassRegistry(group);
                     colorizeByClass();
                     placeLabels();
@@ -1431,6 +1437,103 @@ function updateHover() {
             nameEl.textContent = "—";
         }
     }
+}
+
+// Apply distinct colors to each part in the mesh based on segmentation
+function applyPartColorsToMesh(meshGroup, segData) {
+    if (!meshGroup || !segData || !segData.part_table) return;
+    
+    const parts = segData.part_table.parts || [];
+    
+    // Generate distinct colors for each part
+    const partColors = new Map();
+    parts.forEach((part) => {
+        const partId = part.part_id;
+        // Use consistent color generation based on part ID
+        const hue = (partId * 137.508) % 360; // Golden angle for color distribution
+        const color = new THREE.Color().setHSL(hue / 360, 0.7, 0.5);
+        partColors.set(partId, color);
+    });
+    
+    // Get vertex labels if available
+    const vertexLabels = segData.vertex_labels || [];
+    
+    // Apply colors to meshes using vertex-level coloring
+    meshGroup.traverse((obj) => {
+        if (obj.isMesh && obj.geometry && obj.material) {
+            const geometry = obj.geometry;
+            const positionAttribute = geometry.getAttribute('position');
+            
+            if (!positionAttribute) return;
+            
+            const vertexCount = positionAttribute.count;
+            const positions = positionAttribute.array;
+            
+            // Create color attribute for vertices
+            const colors = new Float32Array(vertexCount * 3);
+            
+            if (vertexLabels.length > 0 && vertexLabels.length >= vertexCount) {
+                // Use vertex labels directly if available
+                for (let i = 0; i < vertexCount; i++) {
+                    const partId = vertexLabels[i] || 0;
+                    const color = partColors.get(partId) || new THREE.Color(0x888888);
+                    
+                    colors[i * 3] = color.r;
+                    colors[i * 3 + 1] = color.g;
+                    colors[i * 3 + 2] = color.b;
+                }
+            } else {
+                // Fallback: use spatial lookup based on vertex positions
+                for (let i = 0; i < vertexCount; i++) {
+                    const x = positions[i * 3];
+                    const y = positions[i * 3 + 1];
+                    const z = positions[i * 3 + 2];
+                    
+                    // Find which part's bounding box contains this vertex
+                    let assignedPartId = null;
+                    for (const part of parts) {
+                        const bboxMin = part.bbox_min || [0, 0, 0];
+                        const bboxMax = part.bbox_max || [0, 0, 0];
+                        
+                        if (x >= bboxMin[0] - 0.1 && x <= bboxMax[0] + 0.1 &&
+                            y >= bboxMin[1] - 0.1 && y <= bboxMax[1] + 0.1 &&
+                            z >= bboxMin[2] - 0.1 && z <= bboxMax[2] + 0.1) {
+                            assignedPartId = part.part_id;
+                            break;
+                        }
+                    }
+                    
+                    // If no part found, use closest centroid
+                    if (assignedPartId === null && parts.length > 0) {
+                        let minDist = Infinity;
+                        for (const part of parts) {
+                            const centroid = part.centroid || [0, 0, 0];
+                            const dist = Math.sqrt(
+                                Math.pow(x - centroid[0], 2) +
+                                Math.pow(y - centroid[1], 2) +
+                                Math.pow(z - centroid[2], 2)
+                            );
+                            if (dist < minDist) {
+                                minDist = dist;
+                                assignedPartId = part.part_id;
+                            }
+                        }
+                    }
+                    
+                    const color = partColors.get(assignedPartId) || new THREE.Color(0x888888);
+                    colors[i * 3] = color.r;
+                    colors[i * 3 + 1] = color.g;
+                    colors[i * 3 + 2] = color.b;
+                }
+            }
+            
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            
+            // Update material to use vertex colors
+            obj.material.vertexColors = true;
+            obj.material.needsUpdate = true;
+        }
+    });
 }
 
 // Highlight a part and all instances with the same ID
