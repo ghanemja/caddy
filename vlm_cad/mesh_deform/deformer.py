@@ -18,6 +18,7 @@ from .utils import compute_pca_axis, normalize_projection, get_world_axis
 
 if TYPE_CHECKING:
     from ..parts.parts import PartTable, PartInfo
+    from ..semantics.types import FinalParameter
 
 
 @dataclass
@@ -386,24 +387,103 @@ class ParametricMeshDeformer:
         return verts_deformed
 
 
+def build_deformation_config_from_vlm_parameters(
+    final_parameters: List["FinalParameter"],
+    part_label_names: Dict[int, str],
+    category: str = "",
+) -> Dict[str, DeformationConfig]:
+    """
+    Auto-build deformation configs from VLM parameters that have part_labels.
+    
+    This uses the VLM's knowledge of which parts each parameter affects,
+    as indicated by the part_labels field in FinalParameter.
+    
+    Args:
+        final_parameters: List of FinalParameter objects from VLM (may have part_labels)
+        part_label_names: mapping from part ID -> user-provided name
+        category: object category (for fallback heuristics)
+        
+    Returns:
+        Dictionary mapping parameter semantic_name -> DeformationConfig
+    """
+    config = {}
+    
+    # Build reverse mapping: part name -> part_id
+    name_to_id = {name: pid for pid, name in part_label_names.items()}
+    
+    # Process each parameter
+    for param in final_parameters:
+        semantic_name = param.semantic_name
+        if not semantic_name:
+            continue
+        
+        # Try to get part_labels from raw_sources (if available)
+        # The VLM may have associated this parameter with specific parts
+        affected_part_names = []
+        
+        # Check if parameter description or name hints at which parts it affects
+        # This is a heuristic fallback if part_labels aren't available
+        param_lower = semantic_name.lower()
+        desc_lower = (param.description or "").lower()
+        
+        # Try to match parameter name to part names
+        for part_name in part_label_names.values():
+            part_lower = part_name.lower()
+            # Check if parameter name contains part name or vice versa
+            if part_lower in param_lower or param_lower in part_lower:
+                affected_part_names.append(part_name)
+        
+        # If we found matches, create config
+        if affected_part_names:
+            # Determine axis source based on parameter name
+            axis_source = "pca"  # Default
+            if any(word in param_lower for word in ["height", "vertical", "z"]):
+                axis_source = "y"  # Typically vertical in Y-up
+            elif any(word in param_lower for word in ["length", "x", "front", "back"]):
+                axis_source = "x"
+            elif any(word in param_lower for word in ["width", "y", "side"]):
+                axis_source = "y"
+            elif any(word in param_lower for word in ["diameter", "radius", "size"]):
+                axis_source = "pca"  # Use PCA for circular/spherical parts
+            
+            config[semantic_name] = DeformationConfig(
+                affects_parts=affected_part_names,
+                mode="axis_stretch",
+                axis_source=axis_source,
+            )
+    
+    return config
+
+
 def build_default_deformation_config_for_category(
     category: str,
     part_label_names: Dict[int, str],
+    final_parameters: Optional[List["FinalParameter"]] = None,
 ) -> Dict[str, DeformationConfig]:
     """
     Build default deformation configuration for a given category.
     
-    This is a heuristic, category-specific mapping that suggests which
-    semantic parameters should affect which parts.
+    This function first tries to auto-build configs from VLM parameters (if provided),
+    then falls back to heuristic category-specific mappings.
     
     Args:
         category: object category (e.g., "airplane", "chair", "car")
         part_label_names: mapping from part ID -> name
+        final_parameters: Optional list of FinalParameter objects from VLM
         
     Returns:
         Dictionary mapping parameter name -> DeformationConfig
     """
     config = {}
+    
+    # First, try to build from VLM parameters if available
+    if final_parameters:
+        vlm_config = build_deformation_config_from_vlm_parameters(
+            final_parameters,
+            part_label_names,
+            category,
+        )
+        config.update(vlm_config)
     
     # Get all part names (values in part_label_names)
     all_part_names = list(part_label_names.values())
@@ -419,23 +499,26 @@ def build_default_deformation_config_for_category(
     
     category_lower = category.lower()
     
+    # Only add heuristic configs if they don't already exist (VLM takes precedence)
     if "airplane" in category_lower or "plane" in category_lower:
         # Airplane-specific parameters
         wing_parts = find_parts_by_substring("wing")
         if wing_parts:
-            config["wing_span"] = DeformationConfig(
-                affects_parts=wing_parts,
-                mode="axis_stretch",
-                axis_source="pca",
-            )
-            config["chord_length"] = DeformationConfig(
-                affects_parts=wing_parts,
-                mode="axis_stretch",
-                axis_source="pca",
-            )
+            if "wing_span" not in config:
+                config["wing_span"] = DeformationConfig(
+                    affects_parts=wing_parts,
+                    mode="axis_stretch",
+                    axis_source="pca",
+                )
+            if "chord_length" not in config:
+                config["chord_length"] = DeformationConfig(
+                    affects_parts=wing_parts,
+                    mode="axis_stretch",
+                    axis_source="pca",
+                )
         
         tail_parts = find_parts_by_substring("tail")
-        if tail_parts:
+        if tail_parts and "tail_height" not in config:
             config["tail_height"] = DeformationConfig(
                 affects_parts=tail_parts,
                 mode="axis_stretch",
@@ -445,7 +528,7 @@ def build_default_deformation_config_for_category(
     elif "chair" in category_lower:
         # Chair-specific parameters
         seat_parts = find_parts_by_substring("seat")
-        if seat_parts:
+        if seat_parts and "seat_height" not in config:
             config["seat_height"] = DeformationConfig(
                 affects_parts=seat_parts,
                 mode="axis_stretch",
@@ -453,7 +536,7 @@ def build_default_deformation_config_for_category(
             )
         
         back_parts = find_parts_by_substring("back")
-        if back_parts:
+        if back_parts and "back_height" not in config:
             config["back_height"] = DeformationConfig(
                 affects_parts=back_parts,
                 mode="axis_stretch",
@@ -461,7 +544,7 @@ def build_default_deformation_config_for_category(
             )
         
         leg_parts = find_parts_by_substring("leg")
-        if leg_parts:
+        if leg_parts and "leg_length" not in config:
             config["leg_length"] = DeformationConfig(
                 affects_parts=leg_parts,
                 mode="axis_stretch",
@@ -471,7 +554,7 @@ def build_default_deformation_config_for_category(
     elif "car" in category_lower:
         # Car-specific parameters
         body_parts = find_parts_by_substring("body")
-        if body_parts:
+        if body_parts and "body_length" not in config:
             config["body_length"] = DeformationConfig(
                 affects_parts=body_parts,
                 mode="axis_stretch",
@@ -480,12 +563,14 @@ def build_default_deformation_config_for_category(
         
         wheel_parts = find_parts_by_substring("wheel")
         if wheel_parts:
-            config["wheel_size"] = DeformationConfig(
-                affects_parts=wheel_parts,
-                mode="axis_stretch",
-                axis_source="pca",
-            )
+            # Check for various wheel parameter names
+            wheel_param_names = ["wheel_size", "wheel_diameter", "wheel_radius", "wheel_width"]
+            if not any(name in config for name in wheel_param_names):
+                config["wheel_size"] = DeformationConfig(
+                    affects_parts=wheel_parts,
+                    mode="axis_stretch",
+                    axis_source="pca",
+                )
     
-    # For unknown categories, return empty dict
     return config
 

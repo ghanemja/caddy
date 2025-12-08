@@ -250,6 +250,9 @@ CURRENT_PARAMS: Dict[str, Optional[float]] = {
 CONTEXT: Dict[str, Any] = {"terrain_mode": "flat"}  # or "uneven"
 HISTORY: List[Dict[str, Optional[float]]] = []
 H_PTR: int = -1
+
+# Cache for IngestResult (keyed by mesh_path)
+_INGEST_RESULT_CACHE: Dict[str, Any] = {}
 INIT_SNAPSHOT: Optional[Dict[str, Optional[float]]] = None
 
 # ----------------- cqparts shim -----------------
@@ -1734,15 +1737,15 @@ def call_vlm(
             monitor_thread.start()
             
             try:
-                with torch.no_grad():
-                    output_ids = _finetuned_model.generate(
-                        **inputs,
-                        max_new_tokens=max_tokens,
-                        temperature=temp,
-                        top_p=0.98,
-                        do_sample=True if temp > 0 else False,
-                        repetition_penalty=1.1,  # Prevent getting stuck in loops
-                    )
+            with torch.no_grad():
+                output_ids = _finetuned_model.generate(
+                    **inputs,
+                    max_new_tokens=max_tokens,
+                    temperature=temp,
+                    top_p=0.98,
+                    do_sample=True if temp > 0 else False,
+                    repetition_penalty=1.1,  # Prevent getting stuck in loops
+                )
             finally:
                 generation_done.set()  # Signal that generation is complete
             
@@ -1957,15 +1960,15 @@ def call_vlm(
                 monitor_thread.start()
                 
                 try:
-                    with torch.no_grad():
-                        output_ids = _finetuned_model.generate(
-                            **inputs,
-                            max_new_tokens=max_tokens,
-                            temperature=temp,
-                            top_p=0.98,
-                            do_sample=True if temp > 0 else False,
-                            repetition_penalty=1.1,
-                        )
+                with torch.no_grad():
+                    output_ids = _finetuned_model.generate(
+                        **inputs,
+                        max_new_tokens=max_tokens,
+                        temperature=temp,
+                        top_p=0.98,
+                        do_sample=True if temp > 0 else False,
+                        repetition_penalty=1.1,
+                    )
                 finally:
                     generation_done.set()  # Signal that generation is complete
                 
@@ -3331,7 +3334,7 @@ def ingest_mesh_label():
         
         from vlm_cad.segmentation import create_segmentation_backend
         from vlm_cad.semantics.vlm_client_finetuned import FinetunedVLMClient
-        from vlm_cad.semantics.vlm_client_ollama import OllamaVLMClient
+                from vlm_cad.semantics.vlm_client_ollama import OllamaVLMClient
         from vlm_cad.semantics.vlm_client import DummyVLMClient
         from vlm_cad.semantics.ingest_mesh import ingest_mesh_to_semantic_params
         from vlm_cad.parts.parts import build_part_table_from_segmentation, apply_labels_from_json
@@ -3414,6 +3417,12 @@ def ingest_mesh_label():
         
         # Update result with user-labeled PartTable
         result.part_table = part_table
+        # Also store vertex labels in extra for easier access
+        result.extra["vertex_labels"] = vertex_labels.tolist() if hasattr(vertex_labels, 'tolist') else list(vertex_labels)
+        
+        # Cache IngestResult for later use in /apply_mesh_params
+        _INGEST_RESULT_CACHE[mesh_path] = result
+        print(f"[ingest_mesh_label] ✓ Cached IngestResult for mesh: {mesh_path}", flush=True)
         
         # Convert to JSON
         def param_to_dict(p):
@@ -3480,11 +3489,20 @@ def ingest_mesh():
     pass
 
 
+# Cache for IngestResult (keyed by mesh_path)
+_INGEST_RESULT_CACHE: Dict[str, Any] = {}
+
+
 @app.post("/apply_mesh_params")
 def apply_mesh_params():
     """
-    Apply parameter changes to deform a mesh.
-    Expects JSON: { "parameters": { "param_id": value, ... } }
+    Apply parameter changes to deform a mesh using the full ParametricMeshDeformer.
+    
+    Expects JSON: {
+        "parameters": { "param_name": value, ... },
+        "mesh_path": "...",  # Optional, will use cached if not provided
+        "enabled_parts": { part_id: bool, ... }  # Optional, for part add/remove
+    }
     Returns: { "ok": True, "glb_path": "...", "message": "..." }
     """
     try:
@@ -3496,15 +3514,22 @@ def apply_mesh_params():
         if not isinstance(parameters, dict):
             return jsonify({"ok": False, "error": "'parameters' must be a dictionary"}), 400
         
-        # Get the current mesh path from session or request
-        # For now, we'll need to store this from the ingestion step
-        # TODO: Store mesh path in session or pass it in the request
-        mesh_path = data.get("mesh_path") or request.cookies.get("current_mesh_path")
+        # Get mesh path from request or use cached one
+        mesh_path = data.get("mesh_path")
+        if not mesh_path:
+            # Try to find the most recent cached result
+            if _INGEST_RESULT_CACHE:
+                mesh_path = list(_INGEST_RESULT_CACHE.keys())[-1]
+            else:
+                return jsonify({
+                    "ok": False,
+                    "error": "No mesh path provided and no cached ingestion result found. Please run mesh ingestion first."
+                }), 400
         
-        if not mesh_path or not os.path.exists(mesh_path):
+        if not os.path.exists(mesh_path):
             return jsonify({
                 "ok": False,
-                "error": "No mesh file available. Please upload and segment a mesh first."
+                "error": f"Mesh file not found: {mesh_path}"
             }), 400
         
         # Import mesh deformation modules
@@ -3514,9 +3539,17 @@ def apply_mesh_params():
             sys.path.insert(0, parent_dir)
         
         from vlm_cad.mesh_deform import ParametricMeshDeformer, MeshData
-        from vlm_cad.semantics.ingest_mesh import build_deformer_from_ingest_result
+        from vlm_cad.semantics.ingest_mesh import build_deformer_from_ingest_result, IngestResult
         import trimesh
         import numpy as np
+        
+        # Get cached IngestResult
+        ingest_result = _INGEST_RESULT_CACHE.get(mesh_path)
+        if not ingest_result:
+            return jsonify({
+                "ok": False,
+                "error": f"No cached ingestion result for mesh: {mesh_path}. Please run mesh ingestion first."
+            }), 400
         
         # Load the mesh
         mesh = trimesh.load(mesh_path)
@@ -3526,38 +3559,68 @@ def apply_mesh_params():
         vertices = np.array(mesh.vertices)
         faces = np.array(mesh.faces)
         
-        # Get base parameters and part table from session/cache
-        # For now, we'll create a simple deformer with default config
-        # TODO: Store IngestResult in session/cache to get proper base parameters
+        # Get part labels from cached result
+        vertex_labels = None
+        if ingest_result.part_table:
+            # Get vertex labels from PartTable
+            vertex_labels = ingest_result.part_table.vertex_part_labels
+            if len(vertex_labels) != len(vertices):
+                # Pad or truncate to match
+                if len(vertex_labels) < len(vertices):
+                    vertex_labels = np.pad(vertex_labels, (0, len(vertices) - len(vertex_labels)), mode='edge')
+                else:
+                    vertex_labels = vertex_labels[:len(vertices)]
         
-        # Create base mesh data
-        base_mesh = MeshData(vertices=vertices, faces=faces)
+        if vertex_labels is None:
+            # Fallback: try to get from extra dict
+            if "vertex_labels" in ingest_result.extra:
+                vertex_labels = np.array(ingest_result.extra["vertex_labels"])
+            else:
+                # Last resort: create dummy labels (all vertices in part 0)
+                print(f"[apply_mesh_params] Warning: No vertex labels found, using dummy labels", flush=True)
+                vertex_labels = np.zeros(len(vertices), dtype=np.int32)
         
-        # Create a simple deformer (this is a simplified version)
-        # In production, you'd want to store the full IngestResult and use build_deformer_from_ingest_result
-        from vlm_cad.mesh_deform.deformer import DeformationConfig
+        # Build part_label_names from PartTable or use defaults
+        part_label_names = {}
+        if ingest_result.part_table:
+            for part_id, part_info in ingest_result.part_table.parts.items():
+                part_label_names[part_id] = part_info.name or f"part_{part_id}"
+        else:
+            # Fallback: use generic names
+            unique_labels = np.unique(vertex_labels)
+            for label_id in unique_labels:
+                part_label_names[int(label_id)] = f"part_{int(label_id)}"
         
-        # For now, apply simple scaling based on parameter changes
-        # This is a placeholder - in production, use the full ParametricMeshDeformer
+        # Build deformer from IngestResult
+        deformer = build_deformer_from_ingest_result(
+            ingest_result=ingest_result,
+            vertices=vertices,
+            faces=faces,
+            part_labels=vertex_labels,
+            part_label_names=part_label_names,
+        )
         
-        # Simple approach: scale the entire mesh based on average parameter change
-        if parameters:
-            # Calculate average scale factor (assuming parameters are in meters)
-            # This is a simplified approach - in production, use proper deformation configs
-            scale_factor = 1.0
-            param_values = list(parameters.values())
-            if param_values:
-                # Use the first parameter as a simple scale (this is a placeholder)
-                # In production, map parameters to specific parts using DeformationConfig
-                avg_value = np.mean([float(v) for v in param_values if isinstance(v, (int, float))])
-                if avg_value > 0:
-                    scale_factor = avg_value / 1.0  # Normalize to 1.0 as baseline
+        # Handle part enable/disable (for add/remove operations)
+        enabled_parts = data.get("enabled_parts")
+        if enabled_parts:
+            # Convert to proper format
+            enabled_parts_dict = {
+                int(k): bool(v) for k, v in enabled_parts.items()
+            }
+        else:
+            enabled_parts_dict = None
         
-        # Apply scaling
-        scaled_vertices = vertices * scale_factor
+        # Apply deformations
+        deformed_mesh_data = deformer.deform(
+            new_parameters=parameters,
+            enabled_parts=enabled_parts_dict,
+        )
         
-        # Create new mesh
-        deformed_mesh = trimesh.Trimesh(vertices=scaled_vertices, faces=faces)
+        # Create trimesh object from deformed mesh
+        deformed_mesh = trimesh.Trimesh(
+            vertices=deformed_mesh_data.vertices,
+            faces=deformed_mesh_data.faces,
+        )
         
         # Save deformed mesh
         output_dir = os.path.join(os.path.dirname(mesh_path), "deformed")
@@ -3566,6 +3629,8 @@ def apply_mesh_params():
         base_name = os.path.splitext(os.path.basename(mesh_path))[0]
         output_path = os.path.join(output_dir, f"{base_name}_deformed.glb")
         deformed_mesh.export(output_path)
+        
+        print(f"[apply_mesh_params] ✓ Applied {len(parameters)} parameter changes, saved to {output_path}", flush=True)
         
         return jsonify({
             "ok": True,

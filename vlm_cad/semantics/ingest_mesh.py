@@ -40,6 +40,7 @@ class IngestResult:
     pre_output: "PreVLMOutput"
     post_output: "PostVLMOutput"
     extra: Dict[str, Any]
+    part_table: Optional["PartTable"] = None  # PartTable for part metadata
     
     # Backward compatibility: final_parameters as alias for proposed_parameters
     @property
@@ -422,9 +423,11 @@ def build_deformer_from_ingest_result(
     }
     
     # Build default deformation config for the category
+    # Pass final_parameters to enable auto-config from VLM part_labels
     config = build_default_deformation_config_for_category(
         ingest_result.category,
         part_label_names,
+        final_parameters=ingest_result.proposed_parameters,
     )
     
     # Create mesh data

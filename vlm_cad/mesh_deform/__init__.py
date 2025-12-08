@@ -10,6 +10,7 @@ from .deformer import (
     DeformationConfig,
     ParametricMeshDeformer,
     build_default_deformation_config_for_category,
+    build_deformation_config_from_vlm_parameters,
 )
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "DeformationConfig",
     "ParametricMeshDeformer",
     "build_default_deformation_config_for_category",
+    "build_deformation_config_from_vlm_parameters",
 ]
 
