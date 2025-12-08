@@ -1960,15 +1960,15 @@ def call_vlm(
                 monitor_thread.start()
                 
                 try:
-                with torch.no_grad():
-                    output_ids = _finetuned_model.generate(
-                        **inputs,
-                        max_new_tokens=max_tokens,
-                        temperature=temp,
-                        top_p=0.98,
-                        do_sample=True if temp > 0 else False,
-                        repetition_penalty=1.1,
-                    )
+                    with torch.no_grad():
+                        output_ids = _finetuned_model.generate(
+                            **inputs,
+                            max_new_tokens=max_tokens,
+                            temperature=temp,
+                            top_p=0.98,
+                            do_sample=True if temp > 0 else False,
+                            repetition_penalty=1.1,
+                        )
                 finally:
                     generation_done.set()  # Signal that generation is complete
                 
@@ -3334,7 +3334,7 @@ def ingest_mesh_label():
         
         from vlm_cad.segmentation import create_segmentation_backend
         from vlm_cad.semantics.vlm_client_finetuned import FinetunedVLMClient
-                from vlm_cad.semantics.vlm_client_ollama import OllamaVLMClient
+        from vlm_cad.semantics.vlm_client_ollama import OllamaVLMClient
         from vlm_cad.semantics.vlm_client import DummyVLMClient
         from vlm_cad.semantics.ingest_mesh import ingest_mesh_to_semantic_params
         from vlm_cad.parts.parts import build_part_table_from_segmentation, apply_labels_from_json
