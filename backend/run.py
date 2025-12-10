@@ -239,76 +239,15 @@ INSTALLED_ADDS: List[dict] = []
 HIDDEN_PREFIXES: List[str] = []
 
 
-def _truthy(x) -> bool:
-    if isinstance(x, bool):
-        return x
-    s = str(x).strip().lower()
-    return s in ("1", "true", "yes", "on")
-
-
 # ----------------- Utility helpers -----------------
-def _num(v, default=None):
-    if v is None:
-        return default
-    if isinstance(v, (int, float)):
-        return float(v)
-    dv = getattr(v, "default", None)
-    if isinstance(dv, (int, float)):
-        return float(dv)
-    val = getattr(v, "value", None)
-    if isinstance(val, (int, float)):
-        return float(val)
-    try:
-        return float(v)
-    except Exception:
-        s = str(v)
-        m = re.search(r"(-?\d+(?:\.\d+)?)", s)
-        if m:
-            try:
-                return float(m.group(1))
-            except Exception:
-                pass
-    return default
-
-
-def _strip_units_to_float(val):
-    if val is None:
-        return None
-    if isinstance(val, (int, float)):
-        return float(val)
-    s = str(val).strip()
-    if not s:
-        return None
-    s = re.sub(r"[^0-9eE+\-\.]", "", s)
-    try:
-        return float(s)
-    except Exception:
-        return None
-
-
-def _percent_to_abs(token, base):
-    if token is None or base is None:
-        return None
-    try:
-        s = str(token).strip()
-        if s.endswith("%"):
-            return float(base) * (float(s[:-1]) / 100.0)
-        f = float(s)
-        return float(base) * f if 0.0 < f <= 2.0 else f
-    except Exception:
-        return None
-
-
-def _cq_to_trimesh(obj, tol=0.6):
-    try:
-        stl_txt = exporters.toString(obj, "STL", tolerance=tol).encode("utf-8")
-        m = trimesh.load(io.BytesIO(stl_txt), file_type="stl")
-        if isinstance(m, trimesh.Scene):
-            m = trimesh.util.concatenate(tuple(m.geometry.values()))
-        return m
-    except Exception as e:
-        print("[mesh] STL export failed:", e)
-        return None
+from app.utils.helpers import (
+    truthy as _truthy,
+    num as _num,
+    strip_units_to_float as _strip_units_to_float,
+    clean_num as _clean_num,
+    percent_to_abs as _percent_to_abs,
+    cq_to_trimesh as _cq_to_trimesh,
+)
 
 
 def _snapshot():
@@ -801,19 +740,7 @@ register_component(
 )
 
 
-# ----------------- Param application -----------------
-def _clean_num(v):
-    try:
-        if v is None:
-            return None
-        if isinstance(v, (int, float)):
-            return float(v)
-        s = str(v).strip()
-        if s == "":
-            return None
-        return float(s)
-    except Exception:
-        return None
+# _clean_num is now imported from app.utils.helpers
 
 
 def apply_params_to_rover(rv, params: Dict[str, Any] | None):
@@ -1337,7 +1264,7 @@ def codegen():
             }), 400
 
         # Apply automatic fixes/normalization
-        code_txt = normalize_generated_code(code_txt)
+        code_txt = _normalize_generated_code_advanced(code_txt)
 
         # Validate code compiles (after normalization)
         try:
@@ -1960,23 +1887,21 @@ def call_vlm(
     raise RuntimeError(err or "No VLM endpoint configured")
 
 
-def normalize_generated_code(code: str) -> str:
+# Code generation utilities are now in app.utils.codegen
+from app.utils.codegen import normalize_generated_code, extract_python_module
+
+def _normalize_generated_code_advanced(code: str) -> str:
     """
-    Normalize/fix common errors in VLM-generated code.
-    
-    Common issues:
-    - Hyphens instead of underscores in attribute names
-    - Missing self. prefix
-    - Undefined 'offsets' variable
-    - Missing class parameters
-    - Missing imports (VLM truncated the file)
+    Advanced normalization with CAD-specific fixes.
+    This extends the basic normalize_generated_code from codegen.py.
     """
-    print("[normalize] Applying automatic fixes to generated code...")
+    # Start with basic normalization
+    code = normalize_generated_code(code)
     
-    original_code = code
+    print("[normalize] Applying CAD-specific fixes...")
     fixes_applied = []
     
-    # Fix 0: Check if imports are missing and add them
+    # CAD-specific fixes (keep these here as they're domain-specific)
     required_imports = [
         "import cadquery as cq",
         "import cqparts",
@@ -1996,20 +1921,15 @@ def normalize_generated_code(code: str) -> str:
     
     # Check if file is missing shebang and imports
     if not code.strip().startswith("#!/usr/bin/env python3"):
-        # VLM truncated the file! Add back the header
-        missing_imports = []
-        for imp in required_imports:
-            if imp not in code:
-                missing_imports.append(imp)
-        
+        missing_imports = [imp for imp in required_imports if imp not in code]
         if missing_imports:
             header = "#!/usr/bin/env python3\n\n" + "\n".join(required_imports) + "\n\n"
             code = header + code
             fixes_applied.append(f"Added missing imports ({len(missing_imports)} imports restored)")
             print(f"[normalize] ✗ VLM truncated file - restored {len(missing_imports)} missing imports")
     
-    # Fix 0b: Check if RobotBase class is missing (VLM sometimes skips it)
-    if "class RobotBase" not in code:
+    # Fix RobotBase class if missing
+    if "class RobotBase" not in code and "class ThisWheel" in code:
         robot_base_class = '''class RobotBase(Lasercut):
     length = PositiveFloat(280)
     width = PositiveFloat(170)
@@ -2062,15 +1982,11 @@ def normalize_generated_code(code: str) -> str:
         )
 
 '''
-        # Insert RobotBase before the first ThisWheel or ThisStepper class
-        if "class ThisWheel" in code:
-            code = code.replace("class ThisWheel", robot_base_class + "class ThisWheel")
-            fixes_applied.append("Added missing RobotBase class")
-            print(f"[normalize] ✗ VLM skipped RobotBase - restored it")
+        code = code.replace("class ThisWheel", robot_base_class + "class ThisWheel")
+        fixes_applied.append("Added missing RobotBase class")
+        print(f"[normalize] ✗ VLM skipped RobotBase - restored it")
     
-    # Fix 1: Replace hyphenated attribute names with underscores
-    # self.wheelbase_span-mm → self.wheelbase_span_mm
-    # self.axle_spacing-mm → self.axle_spacing_mm
+    # Additional CAD-specific fixes
     hyphen_fixes = {
         r'\.wheelbase_span-mm': '.wheelbase_span_mm',
         r'\.axle_spacing-mm': '.axle_spacing_mm',
@@ -2080,13 +1996,11 @@ def normalize_generated_code(code: str) -> str:
     }
     
     for pattern, replacement in hyphen_fixes.items():
-        import re
         if re.search(pattern, code):
             code = re.sub(pattern, replacement, code)
             fixes_applied.append(f"Fixed hyphenated attribute: {pattern} → {replacement}")
     
-    # Fix 2: Undefined 'offsets' variable in make_constraints
-    # for i, off in enumerate(offsets): → for i, off in enumerate(self._axle_offsets()):
+    # Fix undefined 'offsets' variable
     if re.search(r'for\s+i,\s+off\s+in\s+enumerate\(offsets\)', code):
         code = re.sub(
             r'for\s+i,\s+off\s+in\s+enumerate\(offsets\)',
@@ -2095,126 +2009,36 @@ def normalize_generated_code(code: str) -> str:
         )
         fixes_applied.append("Fixed undefined 'offsets' → 'self._axle_offsets()'")
     
-    # Fix 3: Missing class parameters - add them if Rover class exists but missing params
-    rover_match = re.search(r'class Rover\(cqparts\.Assembly\):\s*\n((?:\s+\w+.*\n)*)', code)
-    if rover_match:
-        rover_body = rover_match.group(1)
-        # Check if essential parameters are missing
-        has_length = 'length = ' in rover_body
-        has_width = 'width = ' in rover_body
-        has_chamfer = 'chamfer = ' in rover_body
-        has_thickness = 'thickness = ' in rover_body
-        
-        if not has_length or not has_width:
-            # Need to add missing parameters
-            # Find where to insert (after class declaration, before other params)
-            insert_params = []
-            if not has_length:
-                insert_params.append('    length = PositiveFloat(280)')
-            if not has_width:
-                insert_params.append('    width = PositiveFloat(170)')
-            if not has_chamfer:
-                insert_params.append('    chamfer = PositiveFloat(55)')
-            if not has_thickness:
-                insert_params.append('    thickness = PositiveFloat(6)')
-            
-            if insert_params:
-                # Insert after "class Rover..." line
-                code = re.sub(
-                    r'(class Rover\(cqparts\.Assembly\):\s*\n)',
-                    r'\1' + '\n'.join(insert_params) + '\n',
-                    code
-                )
-                fixes_applied.append(f"Added missing Rover parameters: {', '.join([p.split('=')[0].strip() for p in insert_params])}")
-    
-    # Fix 4: Wrong base length calculation
-    # length=self.wheels_per_side * self.axle_spacing_mm → length=self.length
-    if 'length=self.wheels_per_side' in code:
-        code = code.replace(
-            'length=self.wheels_per_side * self.axle_spacing_mm',
-            'length=self.length'
-        )
-        fixes_applied.append("Fixed RobotBase length calculation")
-    
-    # Fix 5: Return statement in _axle_offsets with syntax error
-    # return [self.axle_spacing-mm] → return [self.chamfer]
-    code = re.sub(
-        r'return \[\s*self\.axle_spacing-mm\s*\]',
-        'return [self.length / 2 - self.chamfer]',
-        code
-    )
-    
-    # Fix 6: max_off calculation error
-    # max_off = self.axle_spacing-mm → max_off = self.length - self.chamfer
-    code = re.sub(
-        r'max_off = self\.axle_spacing-mm',
-        'max_off = self.length - self.chamfer',
-        code
-    )
-    
-    # Fix 7: Electronics/sensors should not have target=base in make_components
-    # self.electronics(target=base) → self.electronics()
-    # self.sensors(target=base) → self.sensors(target=base) [keep for sensors!]
-    if 'self.electronics(target=base)' in code:
-        code = code.replace('self.electronics(target=base)', 'self.electronics()')
-        fixes_applied.append("Removed target=base from electronics() call")
-    
-    # Fix 8: max_off should be length - chamfer, not axle_spacing_mm
-    if 'max_off = self.axle_spacing_mm' in code:
-        code = code.replace(
-            'max_off = self.axle_spacing_mm',
-            'max_off = self.length - self.chamfer'
-        )
-        fixes_applied.append("Fixed max_off calculation in _axle_offsets")
-    
-    # Fix 8b: Fix _axle_offsets to allow 0 wheels
-    # The baseline has: n = max(1, int(...)) which forces minimum 1 wheel
-    # Change to: n = max(0, int(...)) to allow 0 wheels
+    # Fix _axle_offsets to allow 0 wheels
     if 'n = max(1, int(round(float(self.wheels_per_side))))' in code:
         code = code.replace(
             'n = max(1, int(round(float(self.wheels_per_side))))',
             'n = max(0, int(round(float(self.wheels_per_side))))'
         )
-        fixes_applied.append("Fixed _axle_offsets to allow 0 wheels (changed max(1,...) to max(0,...))")
+        fixes_applied.append("Fixed _axle_offsets to allow 0 wheels")
     
-    # Fix 8c: Add check for 0 wheels at the start of _axle_offsets
-    if 'def _axle_offsets(self):' in code and 'if n == 0:' not in code:
-        # Insert "if n == 0: return []" after n = max(0, ...)
-        code = code.replace(
-            'n = max(0, int(round(float(self.wheels_per_side))))',
-            'n = max(0, int(round(float(self.wheels_per_side))))\n        if n == 0:\n            return []'
-        )
-        fixes_applied.append("Added early return for 0 wheels in _axle_offsets")
-    
-    # Fix 9: Remove any trailing incomplete register() calls or display calls
+    # Remove trailing incomplete lines
     lines = code.split('\n')
     cleaned_lines = []
     for line in lines:
-        # Skip incomplete or problematic lines at the end
         if line.strip().startswith('cq.display.') or \
-           line.strip().startswith('register(') and 'model=' not in line:
+           (line.strip().startswith('register(') and 'model=' not in line):
             continue
         cleaned_lines.append(line)
     code = '\n'.join(cleaned_lines)
     
-    # Fix 10: Detect and truncate VLM hallucinations (repetitive class definitions)
-    # If we see the same class name defined multiple times with incrementing values,
-    # truncate at the first repetition
+    # Detect and truncate VLM hallucinations
     lines = code.split('\n')
     class_names_seen = {}
     truncate_at = None
     
     for i, line in enumerate(lines):
-        # Check for class definitions
         class_match = re.match(r'^class\s+(\w+)', line)
         if class_match:
             class_name = class_match.group(1)
             if class_name in class_names_seen:
-                # We've seen this class before - this is likely a repetition/hallucination
-                # Truncate here
                 truncate_at = class_names_seen[class_name]
-                print(f"[normalize] ✗ Detected VLM hallucination: class '{class_name}' repeated at line {i}")
-                print(f"[normalize] Truncating at line {truncate_at} (first occurrence)")
+                print(f"[normalize] ✗ Detected VLM hallucination: class '{class_name}' repeated")
                 fixes_applied.append(f"Truncated hallucination: repeated class '{class_name}'")
                 break
             else:
@@ -2222,129 +2046,17 @@ def normalize_generated_code(code: str) -> str:
     
     if truncate_at is not None:
         code = '\n'.join(lines[:truncate_at])
-        # Ensure we end cleanly - add a comment if the last line is incomplete
         if code and not code.endswith('\n'):
             code += '\n'
         code += '\n# === End of generated code ===\n'
     
-    # Report fixes
     if fixes_applied:
-        print(f"[normalize] Applied {len(fixes_applied)} automatic fixes:")
-        for fix in fixes_applied:
-            print(f"[normalize]   - {fix}")
-    else:
-        print("[normalize] No fixes needed - code looks clean")
+        print(f"[normalize] Applied {len(fixes_applied)} CAD-specific fixes")
     
     return code
 
 
-def extract_python_module(text: str) -> str:
-    """
-    Take possibly chatty model output and return the largest contiguous region of
-    lines that compiles as Python. Prefers fenced blocks, else heuristics from first
-    code-ish line (shebang/import/from/class/def/@decorator/if __name__ ...).
-    Raises ValueError if nothing plausible is found.
-    """
-    if not text:
-        raise ValueError("empty code output")
-
-    t = text.replace("\r\n", "\n")
-
-    # 1) Prefer fenced blocks (```python ...``` or ``` ... ```)
-    fence_match = re.findall(r"```(?:python)?\s*([\s\S]*?)\s*```", t, flags=re.I)
-    candidates = []
-    candidates += fence_match
-
-    # 2) If no fences: slice from the first code-like line
-    if not candidates:
-        lines = t.splitlines()
-        start = None
-        codey = re.compile(
-            r'^\s*(#\!|from\s+\w+|import\s+\w+|class\s+\w+|def\s+\w+|@|if\s+__name__\s*==\s*[\'"]__main__[\'"])'
-        )
-        for i, ln in enumerate(lines):
-            if codey.match(ln):
-                start = i
-                break
-        if start is not None:
-            candidates.append("\n".join(lines[start:]))
-
-    # 3) Also try the whole thing (maybe it’s already clean)
-    candidates.append(t)
-
-    # 4) Light scrub on each candidate, then choose the first that parses
-    def _scrub(s: str) -> str:
-        s = re.sub(r"^```(?:python)?\s*", "", s.strip(), flags=re.I)
-        s = re.sub(r"\s*```$", "", s, flags=re.I).strip()
-        # Drop common trailing chatter that sometimes sneaks in
-        s = re.split(r"\n(?:Explanation|Notes|Rationale|SUMMARY:|Here is|Here's)\b", s, maxsplit=1)[0]
-        # Remove leading explanations like "Here's the modified code:"
-        if not s.startswith(("import", "from", "class", "def", "@", "#!")):
-            lines = s.splitlines()
-            for i, line in enumerate(lines):
-                if line.strip().startswith(("import", "from", "class", "def", "@", "#!")):
-                    s = "\n".join(lines[i:])
-                    break
-        return s.strip()
-
-    seen = set()
-    errors = []
-    
-    for idx, raw in enumerate(candidates):
-        if not raw:
-            continue
-        s = _scrub(raw)
-        if s in seen or len(s) < 50:  # Skip very short snippets
-            continue
-        seen.add(s)
-        try:
-            ast.parse(s)
-            print(f"[extract] ✓ Found valid Python (candidate {idx}, {len(s)} chars)")
-            return s
-        except SyntaxError as e:
-            errors.append(f"Candidate {idx}: SyntaxError at line {e.lineno}: {e.msg}")
-            
-            # Try some common fixes for VLM-generated code
-            if "unmatched" in str(e.msg).lower() or "parenthes" in str(e.msg).lower():
-                print(f"[extract] Attempting to fix unmatched parentheses...")
-                # Try to balance parentheses
-                fixed = s
-                # Count and try to fix
-                open_count = fixed.count('(')
-                close_count = fixed.count(')')
-                if open_count != close_count:
-                    print(f"[extract] Unbalanced: {open_count} '(' vs {close_count} ')'")
-                    # This is tricky, but let's try removing trailing incomplete lines
-                    lines = fixed.splitlines()
-                    for trim_count in range(1, min(5, len(lines))):
-                        trimmed = "\n".join(lines[:-trim_count])
-                        try:
-                            ast.parse(trimmed)
-                            print(f"[extract] ✓ Fixed by removing last {trim_count} lines")
-                            return trimmed
-                        except:
-                            pass
-            
-            # Try trimming leading non-code lines progressively
-            lines = s.splitlines()
-            codey2 = re.compile(r"^\s*(from|import|class|def|@|if\s+__name__)")
-            for i in range(len(lines)):
-                if codey2.match(lines[i]):
-                    chunk = "\n".join(lines[i:])
-                    try:
-                        ast.parse(chunk)
-                        print(f"[extract] ✓ Found valid Python after trimming {i} lines")
-                        return chunk
-                    except Exception:
-                        pass
-        except Exception as e:
-            errors.append(f"Candidate {idx}: {type(e).__name__}: {e}")
-    
-    # If we got here, nothing worked
-    error_msg = "no valid Python block found in model output"
-    if errors:
-        error_msg += f"\n  Tried {len(candidates)} candidates, errors:\n  " + "\n  ".join(errors[:3])
-    raise ValueError(error_msg)
+# extract_python_module is now imported from app.utils.codegen
 
 
 # ----------------- CAD state JSON for grounding -----------------
