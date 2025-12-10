@@ -100,8 +100,8 @@ echo ""
 echo "Step 3: Setting up PointNet++ model..."
 echo ""
 
-# Create models directory
-MODELS_DIR="models/pointnet2"
+# Create checkpoints directory
+MODELS_DIR="checkpoints/pointnet2"
 mkdir -p "$MODELS_DIR"
 
 # Check if model already exists
