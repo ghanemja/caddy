@@ -1,15 +1,33 @@
 #!/usr/bin/env python3
-# server.py — Rover CAD viewer/editor (GLB pipeline with real “add” support)
+# server.py — Rover CAD viewer/editor (GLB pipeline with real "add" support)
 # Import and run build()
 import io, os, sys, json, re, base64, threading, mimetypes, ast, math
+from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple, TYPE_CHECKING
+
+# ----------------- Setup Python path FIRST -----------------
+# Set up paths BEFORE importing any packages that might conflict
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(BACKEND_DIR)
+
+# Add paths, but ensure current directory doesn't interfere with package imports
+# Remove current directory from path if it's there, then add our paths
+if '' in sys.path:
+    sys.path.remove('')
+if os.getcwd() in sys.path:
+    sys.path.remove(os.getcwd())
+
+# Add our paths
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+# Now import packages (after path is set up correctly)
 import requests
 import numpy as np
-import cadquery as cq
 import trimesh
 from trimesh.transformations import euler_matrix
-from cadquery import exporters
-from cadquery import Workplane
 from flask import (
     Flask,
     Response,
@@ -81,18 +99,105 @@ def load_freecad():
     )
 
 
-FreeCAD = load_freecad()
+# FreeCAD loading - load the real FreeCAD library
+FreeCAD = None
+try:
+    FreeCAD = load_freecad()
+    print("[freecad] ✓ FreeCAD loaded successfully")
+except (ImportError, Exception) as e:
+    print(f"[freecad] ✗ FreeCAD loading failed: {e}")
+    print("[freecad] ✗ Make sure you're using the correct Python environment")
+    print("[freecad] ✗ Try: conda activate vlm_optimizer")
+    print("[freecad] ✗ Or run: ./start_server.sh (which activates the correct environment)")
+    raise  # Don't continue without FreeCAD - it's required for CAD building
+
+# ----------------- Initialize CadQuery with FreeCAD -----------------
+# CadQuery needs to be initialized with FreeCAD before importing CAD components
+# cqparts_fasteners expects cadquery.freecad_impl.FreeCAD to exist
+import cadquery as cq
+from cadquery import exporters
+from cadquery import Workplane
+
+# Initialize CadQuery to use FreeCAD
+# Create freecad_impl module if it doesn't exist (for cqparts_fasteners compatibility)
+try:
+    if not hasattr(cq, 'freecad_impl'):
+        # Create the freecad_impl module dynamically
+        import types
+        cq.freecad_impl = types.ModuleType('freecad_impl')
+        cq.freecad_impl.FreeCAD = FreeCAD
+        print("[cadquery] ✓ Created cadquery.freecad_impl and initialized with FreeCAD")
+    else:
+        # Set FreeCAD in existing freecad_impl module
+        cq.freecad_impl.FreeCAD = FreeCAD
+        print("[cadquery] ✓ CadQuery initialized with FreeCAD")
+except Exception as e:
+    print(f"[cadquery] ⚠ Warning: Could not initialize CadQuery with FreeCAD: {e}")
+    print("[cadquery] ⚠ Continuing anyway - some features may not work")
+
+# ----------------- CadQuery compatibility shims -----------------
+# cqparts_fasteners expects BoxSelector to be importable from cadquery
+# In newer CadQuery versions, BoxSelector is in cadquery.selectors, not cadquery directly
+# Make it available at the cadquery level for backward compatibility
+try:
+    if not hasattr(cq, 'BoxSelector'):
+        from cadquery import selectors
+        if hasattr(selectors, 'BoxSelector'):
+            # Make BoxSelector available at cadquery level for cqparts_fasteners compatibility
+            cq.BoxSelector = selectors.BoxSelector
+            print("[cadquery] ✓ Made BoxSelector available from cadquery.selectors")
+        else:
+            print("[cadquery] ⚠ BoxSelector not found in cadquery.selectors")
+except Exception as e:
+    print(f"[cadquery] ⚠ Warning: Could not set up BoxSelector compatibility: {e}")
 
 # ----------------- Repo components -----------------
-# Add app/models/cad to path so imports work
-_cad_models_path = os.path.join(os.path.dirname(__file__), "app", "models", "cad")
+# CAD components are now optional - no hardcoded rover dependency
+
+# Add app/models/cad to path so imports work (if the directory exists)
+_cad_models_path = os.path.join(BACKEND_DIR, "app", "models", "cad")
 if os.path.exists(_cad_models_path) and _cad_models_path not in sys.path:
     sys.path.insert(0, _cad_models_path)
 
-# Import from app.models.cad (components moved there)
+# Try to import CAD components, but don't fail if they're not available
+# This allows the server to run without rover-specific dependencies
+Rover = None
+_Electronics = None
+_PanTilt = None
+_ThisWheel = None
+_Stepper = None
+SensorFork = None
+
 try:
-    from app.models.cad import Rover, Electronics as _Electronics, PanTilt as _PanTilt
-    from app.models.cad import BuiltWheel as _ThisWheel, Stepper as _Stepper, SensorFork
+    from app.models.cad import Electronics as _Electronics, PanTilt as _PanTilt
+    from app.models.cad import BuiltWheel as _ThisWheel, SensorFork
+    print("[imports] ✓ Loaded some CAD components from app.models.cad")
+    # Try to import Rover separately (may fail due to cqparts_motors dependency)
+    try:
+        from app.models.cad import Rover
+        print("[imports] ✓ Loaded Rover component")
+    except ImportError as rover_err:
+        print(f"[imports] ⚠ Rover not available (optional): {rover_err}")
+        Rover = None
+except ImportError as e:
+    # Fallback: try direct imports without Rover
+    try:
+        from app.models.cad.electronics import type1 as _Electronics
+        from app.models.cad.pan_tilt import PanTilt as _PanTilt
+        from app.models.cad.wheel import BuiltWheel as _ThisWheel
+        from app.models.cad.sensor_fork import SensorFork
+        print("[imports] ✓ Loaded CAD components (direct, without Rover)")
+        # Try Rover separately
+        try:
+            from app.models.cad.robot_base import Rover
+            print("[imports] ✓ Loaded Rover component")
+        except ImportError:
+            print("[imports] ⚠ Rover not available (optional)")
+            Rover = None
+    except ImportError as e2:
+        print(f"[imports] ⚠ Some CAD components not available (optional)")
+        print(f"[imports] ⚠ Error: {e2}")
+        # Continue without CAD components - server can still run for other features
 except ImportError:
     # Fallback: try direct import from current directory
     try:
