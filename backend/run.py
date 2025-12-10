@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
-# server.py — Rover CAD viewer/editor (GLB pipeline with real "add" support)
-# Import and run build()
+"""
+CAD Optimizer Server
+Main entry point for the Flask application.
+"""
 import io, os, sys, json, re, base64, threading, mimetypes, ast, math
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple, TYPE_CHECKING
 
 # ----------------- Setup Python path FIRST -----------------
 # Set up paths BEFORE importing any packages that might conflict
-BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(BACKEND_DIR)
+BACKEND_DIR = Path(__file__).parent.resolve()
+ROOT_DIR = BACKEND_DIR.parent
 
 # Add paths, but ensure current directory doesn't interfere with package imports
-# Remove current directory from path if it's there, then add our paths
 if '' in sys.path:
     sys.path.remove('')
-if os.getcwd() in sys.path:
-    sys.path.remove(os.getcwd())
+if str(os.getcwd()) in sys.path:
+    sys.path.remove(str(os.getcwd()))
 
 # Add our paths
-if BACKEND_DIR not in sys.path:
-    sys.path.insert(0, BACKEND_DIR)
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 # Now import packages (after path is set up correctly)
 import requests
@@ -39,117 +40,14 @@ from flask import (
     render_template,
 )
 
-# ----------------- FreeCAD bootstrap -----------------
-import importlib.util
-
-
-def load_freecad():
-    """
-    Load FreeCAD module. Tries multiple locations:
-    1. Direct import (if available in Python path)
-    2. Conda environment lib directory
-    3. Extracted AppImage location
-    """
-    # Try 1: Direct import (conda-installed FreeCAD may work this way)
-    try:
-        import FreeCAD
-        print("[freecad] ✓ Loaded FreeCAD from system/conda")
-        return FreeCAD
-    except ImportError:
-        pass
-    
-    # Try 2: Load from conda environment's lib directory
-    conda_prefix = os.environ.get("CONDA_PREFIX")
-    if conda_prefix:
-        conda_freecad_path = os.path.join(conda_prefix, "lib", "FreeCAD.so")
-        if os.path.exists(conda_freecad_path):
-            try:
-                spec = importlib.util.spec_from_file_location("FreeCAD", conda_freecad_path)
-                FreeCAD = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(FreeCAD)
-                sys.modules["FreeCAD"] = FreeCAD
-                print(f"[freecad] ✓ Loaded FreeCAD from conda: {conda_freecad_path}")
-                return FreeCAD
-            except Exception as e:
-                print(f"[freecad] ⚠ Failed to load from conda: {e}")
-    
-    # Try 3: Load from AppImage extraction directory
-    appimage_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), 
-        "squashfs-root", "usr", "lib", "FreeCAD.so"
-    )
-    if os.path.exists(appimage_path):
-        try:
-            spec = importlib.util.spec_from_file_location("FreeCAD", appimage_path)
-            FreeCAD = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(FreeCAD)
-            sys.modules["FreeCAD"] = FreeCAD
-            print(f"[freecad] ✓ Loaded FreeCAD from AppImage: {appimage_path}")
-            return FreeCAD
-        except Exception as e:
-            print(f"[freecad] ⚠ Failed to load from AppImage: {e}")
-    
-    # If all methods fail, raise error with helpful message
-    raise ImportError(
-        "Could not load FreeCAD module. Tried:\n"
-        f"  1. Direct import from Python path\n"
-        f"  2. Conda environment: {conda_freecad_path if conda_prefix else 'N/A'}\n"
-        f"  3. AppImage: {appimage_path}\n"
-        "Install FreeCAD with: conda install -c conda-forge freecad"
-    )
-
-
-# FreeCAD loading - load the real FreeCAD library
-FreeCAD = None
-try:
-    FreeCAD = load_freecad()
-    print("[freecad] ✓ FreeCAD loaded successfully")
-except (ImportError, Exception) as e:
-    print(f"[freecad] ✗ FreeCAD loading failed: {e}")
-    print("[freecad] ✗ Make sure you're using the correct Python environment")
-    print("[freecad] ✗ Try: conda activate vlm_optimizer")
-    print("[freecad] ✗ Or run: ./start_server.sh (which activates the correct environment)")
-    raise  # Don't continue without FreeCAD - it's required for CAD building
-
-# ----------------- Initialize CadQuery with FreeCAD -----------------
-# CadQuery needs to be initialized with FreeCAD before importing CAD components
-# cqparts_fasteners expects cadquery.freecad_impl.FreeCAD to exist
+# ----------------- Initialize FreeCAD and CadQuery -----------------
+# Use service modules for initialization
+from app.services.freecad_service import FreeCAD, init_cadquery_with_freecad
 import cadquery as cq
-from cadquery import exporters
-from cadquery import Workplane
+from cadquery import exporters, Workplane
 
-# Initialize CadQuery to use FreeCAD
-# Create freecad_impl module if it doesn't exist (for cqparts_fasteners compatibility)
-try:
-    if not hasattr(cq, 'freecad_impl'):
-        # Create the freecad_impl module dynamically
-        import types
-        cq.freecad_impl = types.ModuleType('freecad_impl')
-        cq.freecad_impl.FreeCAD = FreeCAD
-        print("[cadquery] ✓ Created cadquery.freecad_impl and initialized with FreeCAD")
-    else:
-        # Set FreeCAD in existing freecad_impl module
-        cq.freecad_impl.FreeCAD = FreeCAD
-        print("[cadquery] ✓ CadQuery initialized with FreeCAD")
-except Exception as e:
-    print(f"[cadquery] ⚠ Warning: Could not initialize CadQuery with FreeCAD: {e}")
-    print("[cadquery] ⚠ Continuing anyway - some features may not work")
-
-# ----------------- CadQuery compatibility shims -----------------
-# cqparts_fasteners expects BoxSelector to be importable from cadquery
-# In newer CadQuery versions, BoxSelector is in cadquery.selectors, not cadquery directly
-# Make it available at the cadquery level for backward compatibility
-try:
-    if not hasattr(cq, 'BoxSelector'):
-        from cadquery import selectors
-        if hasattr(selectors, 'BoxSelector'):
-            # Make BoxSelector available at cadquery level for cqparts_fasteners compatibility
-            cq.BoxSelector = selectors.BoxSelector
-            print("[cadquery] ✓ Made BoxSelector available from cadquery.selectors")
-        else:
-            print("[cadquery] ⚠ BoxSelector not found in cadquery.selectors")
-except Exception as e:
-    print(f"[cadquery] ⚠ Warning: Could not set up BoxSelector compatibility: {e}")
+# Initialize CadQuery with FreeCAD
+cq, exporters, Workplane = init_cadquery_with_freecad(FreeCAD)
 
 # ----------------- Repo components -----------------
 # CAD components are now optional - no hardcoded rover dependency
@@ -220,96 +118,20 @@ except ImportError:
 mimetypes.add_type("application/javascript", ".js")
 
 # ----------------- VLM config -----------------
-USE_FINETUNED_MODEL = os.environ.get("USE_FINETUNED_MODEL", "1") == "1"  # Use fine-tuned by default
-# Default to runs/onevision_lora_small/checkpoint-4 relative to project root
-# BASE_DIR will be defined later, so we compute it here
-_vlm_base_dir = os.path.dirname(__file__)
-_default_model_path = os.path.join(_vlm_base_dir, "runs", "onevision_lora_small", "checkpoint-4")
-FINETUNED_MODEL_PATH = os.environ.get(
-    "FINETUNED_MODEL_PATH", 
-    _default_model_path
+from app.services.vlm_service import (
+    USE_FINETUNED_MODEL,
+    FINETUNED_MODEL_PATH,
+    OLLAMA_URL,
+    OLLAMA_MODEL,
+    LLAVA_URL,
+    load_finetuned_model,
+    get_finetuned_model as _get_finetuned_model,
+    get_finetuned_processor as _get_finetuned_processor,
 )
-OLLAMA_URL = os.environ.get(
-    "OLLAMA_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-).rstrip("/")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llava:latest")  # Default to llava:latest (user has this)
-LLAVA_URL = os.environ.get("LLAVA_URL")  # optional
 
-# Global variable to hold the fine-tuned model and processor
-_finetuned_model = None
-_finetuned_processor = None
-
-
-def load_finetuned_model():
-    """Load the fine-tuned VLM model with LoRA adapter."""
-    global _finetuned_model, _finetuned_processor
-    
-    if not USE_FINETUNED_MODEL:
-        print("[vlm] Fine-tuned model disabled, will use Ollama/LLAVA")
-        return
-    
-    if _finetuned_model is not None:
-        print("[vlm] Fine-tuned model already loaded")
-        return
-    
-    try:
-        print(f"[vlm] Loading fine-tuned model from {FINETUNED_MODEL_PATH}...")
-        
-        # Import necessary libraries
-        from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
-        from peft import PeftModel
-        import torch
-        
-        # Load base model
-        base_model_name = "llava-hf/llava-onevision-qwen2-7b-ov-hf"
-        print(f"[vlm] Loading base model: {base_model_name}")
-        
-        # Check if CUDA is available
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"[vlm] Using device: {device}")
-        
-        # Load processor
-        print(f"[vlm] Loading processor...")
-        _finetuned_processor = AutoProcessor.from_pretrained(base_model_name)
-        print(f"[vlm] ✓ Processor loaded")
-        
-        # Load base model with optimizations for faster loading
-        # Note: If model is cached, this will be fast. First-time download may take a few minutes.
-        print(f"[vlm] Loading base model from cache (or downloading if first time)...")
-        base_model = LlavaOnevisionForConditionalGeneration.from_pretrained(
-            base_model_name,
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-            device_map="auto" if device == "cuda" else None,
-            low_cpu_mem_usage=True,
-            # Speed up loading by using safetensors
-            use_safetensors=True,
-        )
-        print(f"[vlm] ✓ Base model loaded to {device}")
-        
-        # Load LoRA adapter
-        print(f"[vlm] Loading LoRA adapter from {FINETUNED_MODEL_PATH}")
-        _finetuned_model = PeftModel.from_pretrained(
-            base_model,
-            FINETUNED_MODEL_PATH,
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-        )
-        
-        # Set to evaluation mode
-        _finetuned_model.eval()
-        
-        print(f"[vlm] ✓ Fine-tuned model loaded successfully on {device}")
-        
-    except ImportError as e:
-        print(f"[vlm] ✗ Failed to import required libraries: {e}")
-        print("[vlm] Install with: pip install transformers peft torch pillow accelerate")
-        _finetuned_model = None
-        _finetuned_processor = None
-    except Exception as e:
-        print(f"[vlm] ✗ Failed to load fine-tuned model: {e}")
-        import traceback
-        traceback.print_exc()
-        _finetuned_model = None
-        _finetuned_processor = None
+# Keep backward compatibility
+_finetuned_model = None  # Will be lazy-loaded
+_finetuned_processor = None  # Will be lazy-loaded
 
 
 # ----------------- Aliases -----------------
@@ -342,13 +164,23 @@ ACTION_ALIASES = {
 
 # ----------------- App, paths, state -----------------
 PORT = int(os.environ.get("PORT", "5160"))
-BASE_DIR = os.path.dirname(__file__)  # Now at root level
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+# ----------------- App configuration -----------------
+# Use config for paths
+from app.config import Config
+
+BASE_DIR = BACKEND_DIR  # backend/ directory
+ASSETS_DIR = Config.ASSETS_DIR  # frontend/assets/
 os.makedirs(ASSETS_DIR, exist_ok=True)
-ROVER_GLB_PATH = os.path.join(ASSETS_DIR, "rover.glb")
+ROVER_GLB_PATH = str(ASSETS_DIR / "rover.glb")  # Keep as string for compatibility
 USE_CQPARTS = os.environ.get("USE_CQPARTS", "1") == "1"
 
-app = Flask(__name__, static_folder="static")
+# Initialize Flask app with correct template and static folders
+app = Flask(
+    __name__,
+    template_folder=str(Config.TEMPLATES_FOLDER),
+    static_folder=str(Config.STATIC_FOLDER),
+    static_url_path="/static"
+)
 STATE: Dict[str, Any] = {"selected_parts": []}
 
 CURRENT_PARAMS: Dict[str, Optional[float]] = {
@@ -398,23 +230,7 @@ cq.Workplane.local_coords = property(lambda self: CoordSystem())
 
 
 # ----------------- Component registry -----------------
-class ComponentSpec:
-    def __init__(self, cls, add_fn=None, param_map=None, proxy_fn=None):
-        self.cls = cls
-        self.add_fn = add_fn
-        self.param_map = param_map or {}
-        self.proxy_fn = proxy_fn
-
-
-COMPONENT_REGISTRY: Dict[str, ComponentSpec] = {}
-
-
-def register_component(key: str, spec: ComponentSpec):
-    COMPONENT_REGISTRY[key.lower()] = spec
-
-
-def get_component_spec(key: str) -> Optional[ComponentSpec]:
-    return COMPONENT_REGISTRY.get(key.lower())
+from app.core.component_registry import ComponentSpec, register_component, get_component_spec, COMPONENT_REGISTRY
 
 
 # queued ops for true geometry adds
