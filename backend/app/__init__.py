@@ -49,9 +49,10 @@ def create_app(config_name=None):
     # Register main routes (may override legacy / and /debug)
     app.register_blueprint(main.bp)
     
-    # Register API blueprints with prefixes
-    app.register_blueprint(api.bp, url_prefix="/api")
-    app.register_blueprint(vlm.bp, url_prefix="/api/vlm")
+    # Register API blueprints
+    # Some routes are at root level, some have prefixes
+    app.register_blueprint(api.bp)  # Routes like /state, /apply, /params
+    app.register_blueprint(vlm.bp)  # Routes like /codegen, /vlm, /recommend
     app.register_blueprint(mesh.bp, url_prefix="/api/mesh")
     app.register_blueprint(model.bp, url_prefix="/api/model")
     
