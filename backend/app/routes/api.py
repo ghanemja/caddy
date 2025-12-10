@@ -9,16 +9,14 @@ import sys
 
 bp = Blueprint("api", __name__)
 
-# Import from legacy optim.py for now
-# BASE_DIR is now at root level (parent of app/)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-sys.path.insert(0, BASE_DIR)
+# Import from run.py (legacy optim.py renamed)
+# All functions will be gradually moved to service modules
 
 
 @bp.get("/state")
 def state():
     """Get current application state."""
-    from optim import _ensure_initial_history
+    from run import _ensure_initial_history
     _ensure_initial_history()
     which = (request.args.get("which") or "all").lower()
     return jsonify(get_state(which))
@@ -34,7 +32,7 @@ def state_reset():
 @bp.post("/apply")
 def apply():
     """Apply changes to the CAD model."""
-    from optim import _parse_apply_request
+    from run import _parse_apply_request
     changes, excerpt = _parse_apply_request()
     if not changes:
         return jsonify({"ok": False, "error": "no changes provided"}), 400
@@ -46,14 +44,14 @@ def apply():
 @bp.get("/mode")
 def mode():
     """Get current mode."""
-    from optim import USE_CQPARTS
+    from run import USE_CQPARTS
     return jsonify({"mode": "cqparts" if USE_CQPARTS else "legacy"})
 
 
 @bp.post("/label")
 def label():
     """Set label for a component."""
-    from optim import STATE
+    from run import STATE
     data = request.get_json() or {}
     key = data.get("key")
     label = data.get("label")
@@ -67,7 +65,7 @@ def label():
 @bp.get("/labels")
 def labels():
     """Get all labels."""
-    from optim import STATE
+    from run import STATE
     return jsonify(STATE.get("labels", {}))
 
 
@@ -84,7 +82,7 @@ def model_glb():
 @bp.post("/undo")
 def undo():
     """Undo last change."""
-    from optim import HISTORY, H_PTR, _restore, _rebuild_and_save_glb
+    from run import HISTORY, H_PTR, _restore, _rebuild_and_save_glb
     if H_PTR > 0:
         H_PTR -= 1
         _restore(HISTORY[H_PTR])
@@ -96,7 +94,7 @@ def undo():
 @bp.post("/redo")
 def redo():
     """Redo last undone change."""
-    from optim import HISTORY, H_PTR, _restore, _rebuild_and_save_glb
+    from run import HISTORY, H_PTR, _restore, _rebuild_and_save_glb
     if H_PTR < len(HISTORY) - 1:
         H_PTR += 1
         _restore(HISTORY[H_PTR])
@@ -108,6 +106,6 @@ def redo():
 @bp.get("/params")
 def params():
     """Get current parameters."""
-    from optim import CURRENT_PARAMS
+    from run import CURRENT_PARAMS
     return jsonify(CURRENT_PARAMS)
 

@@ -17,17 +17,17 @@ def create_app(config_name=None):
     """
     Create and configure the Flask application.
     
-    Uses optim.py's app instance and registers new blueprints on it.
+    Uses run.py's app instance and registers blueprints on it.
     This preserves all functionality while allowing gradual migration.
     """
-    # Import optim first - it creates the Flask app and all global state
-    # We'll use optim's app and register our blueprints on it
+    # Import run.py first - it creates the Flask app and all global state
+    # We'll use run's app and register our blueprints on it
     try:
-        import optim
-        app = optim.app  # Use optim's app instance
+        import run
+        app = run.app  # Use run's app instance
     except ImportError:
-        # Fallback: create our own app if optim.py doesn't exist
-        print("[app] Warning: optim.py not found, creating new app")
+        # Fallback: create our own app if run.py doesn't exist
+        print("[app] Warning: run.py not found, creating new app")
         app = Flask(
             __name__,
             template_folder=str(ROOT_DIR / "frontend" / "templates"),
@@ -55,16 +55,16 @@ def create_app(config_name=None):
     app.register_blueprint(mesh.bp, url_prefix="/api/mesh")
     app.register_blueprint(model.bp, url_prefix="/api/model")
     
-    # Make optim module available for services (if it was imported)
+    # Make run module available for services (if it was imported)
     try:
-        import optim
-        app._legacy_optim = optim
+        import run
+        app._legacy_run = run
     except ImportError:
         pass
     
     return app
 
 
-# Legacy routes are automatically available since we use optim.app
-# No need for separate registration
+# Legacy routes are automatically available since we use run.app
+# Blueprints provide organized routes while preserving legacy functionality
 

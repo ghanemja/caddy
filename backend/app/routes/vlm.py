@@ -21,10 +21,10 @@ sys.path.insert(0, BASE_DIR)
 @bp.post("/codegen")
 def codegen():
     """VLM-powered code generation endpoint."""
-    from optim import (
+    from run import (
         _build_codegen_prompt, _data_url_from_upload,
         _baseline_cqparts_source, extract_python_module,
-        normalize_generated_code, OLLAMA_MODEL
+        _normalize_generated_code_advanced as normalize_generated_code, OLLAMA_MODEL
     )
     import time
     
@@ -105,7 +105,7 @@ def codegen():
 @bp.post("/recommend")
 def recommend():
     """Get VLM recommendations for CAD changes."""
-    from optim import (
+    from run import (
         _data_url_from_upload, _cad_state_json,
         _split_multi_json_and_summaries, VLM_SYSTEM_PROMPT, call_vlm
     )
@@ -171,7 +171,7 @@ def recommend():
 @bp.post("")
 def vlm_call():
     """Direct VLM call endpoint."""
-    from optim import call_vlm
+    from run import call_vlm
     data = request.get_json() or {}
     prompt = data.get("prompt", "")
     images = data.get("images", [])

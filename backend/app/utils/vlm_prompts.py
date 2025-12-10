@@ -4,26 +4,10 @@ VLM prompt building utilities
 from typing import Optional, List, Tuple
 
 
-VLM_SYSTEM_PROMPT = """You are a CAD parameter extraction assistant. Analyze the provided images and extract precise parameter changes in JSON format.
-
-Output ONLY valid JSON, no markdown, no explanations. Format:
-[
-  {
-    "target_component": "wheel",
-    "action": "modify",
-    "parameters": {"wheel_diameter": 100}
-  }
-]"""
-
-VLM_CODEGEN_PROMPT = """You are a CAD code generation assistant. Given a baseline Python class and user instructions, generate modified code.
-
-CRITICAL RULES:
-1. Copy the ENTIRE baseline code exactly
-2. Make ONLY the requested parameter changes
-3. Change ONLY numbers inside PositiveFloat(...)
-4. Keep everything else identical
-5. NO markdown fences - output raw Python only
-6. Start with: #!/usr/bin/env python3"""
+# Import full prompts from run.py for now (will be moved here during refactoring)
+# These are the full, detailed prompts used by the VLM
+VLM_SYSTEM_PROMPT = None  # Will be imported from run.py
+VLM_CODEGEN_PROMPT = None  # Will be imported from run.py
 
 
 def build_codegen_prompt(
