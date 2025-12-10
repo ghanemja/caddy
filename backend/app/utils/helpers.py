@@ -99,3 +99,14 @@ def cq_to_trimesh(obj, tol=0.6):
         print("[mesh] STL export failed:", e)
         return None
 
+
+def data_url_from_upload(file_storage) -> Optional[str]:
+    """Convert uploaded file storage to data URL."""
+    if not file_storage:
+        return None
+    import base64
+    raw = file_storage.read()
+    mime = file_storage.mimetype or "application/octet-stream"
+    b64 = base64.b64encode(raw).decode("ascii")
+    return f"data:{mime};base64,{b64}"
+

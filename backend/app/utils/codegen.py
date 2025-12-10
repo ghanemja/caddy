@@ -167,3 +167,169 @@ def normalize_generated_code_full(code: str) -> str:
     
     return code
 
+
+def normalize_generated_code_advanced(code: str) -> str:
+    """
+    Advanced normalization with CAD-specific fixes.
+    This extends the basic normalize_generated_code from codegen.py.
+    """
+    # Start with basic normalization
+    code = normalize_generated_code(code)
+    
+    print("[normalize] Applying CAD-specific fixes...")
+    fixes_applied = []
+    
+    # CAD-specific fixes (keep these here as they're domain-specific)
+    required_imports = [
+        "import cadquery as cq",
+        "import cqparts",
+        "from cqparts.params import PositiveFloat",
+        "from cqparts.display import render_props",
+        "from cqparts.constraint import Fixed, Coincident, Mate",
+        "from cqparts.utils.geometry import CoordSystem",
+        "from cqparts.search import register",
+        "from partref import PartRef",
+        "from manufacture import Lasercut",
+        "from motor_mount import MountedStepper",
+        "from cqparts_motors.stepper import Stepper",
+        "from wheel import SpokeWheel",
+        "from electronics import type1 as Electronics",
+        "from pan_tilt import PanTilt",
+    ]
+    
+    # Check if file is missing shebang and imports
+    if not code.strip().startswith("#!/usr/bin/env python3"):
+        missing_imports = [imp for imp in required_imports if imp not in code]
+        if missing_imports:
+            header = "#!/usr/bin/env python3\n\n" + "\n".join(required_imports) + "\n\n"
+            code = header + code
+            fixes_applied.append(f"Added missing imports ({len(missing_imports)} imports restored)")
+            print(f"[normalize] ✗ VLM truncated file - restored {len(missing_imports)} missing imports")
+    
+    # Fix RobotBase class if missing
+    if "class RobotBase" not in code and "class ThisWheel" in code:
+        robot_base_class = '''class RobotBase(Lasercut):
+    length = PositiveFloat(280)
+    width = PositiveFloat(170)
+    chamfer = PositiveFloat(55)
+    thickness = PositiveFloat(6)
+
+    def make(self):
+        base = cq.Workplane("XY").rect(self.length, self.width).extrude(self.thickness)
+        base = base.edges("|Z and >X").chamfer(self.chamfer)
+        return base
+
+    def mate_back(self, offset=5):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(-self.length / 2 + offset, 0, self.thickness),
+                xDir=(1, 0, 0),
+                normal=(0, 0, 1),
+            ),
+        )
+
+    def mate_front(self, offset=0):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(self.length / 2 - offset, 0, self.thickness),
+                xDir=(1, 0, 0),
+                normal=(0, 0, 1),
+            ),
+        )
+
+    def mate_RL(self, offset=0):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(-self.length / 2 + offset, self.width / 2, 0),
+                xDir=(1, 0, 0),
+                normal=(0, 0, -1),
+            ),
+        )
+
+    def mate_RR(self, offset=0):
+        return Mate(
+            self,
+            CoordSystem(
+                origin=(-self.length / 2 + offset, -self.width / 2, 0),
+                xDir=(-1, 0, 0),
+                normal=(0, 0, -1),
+            ),
+        )
+
+'''
+        code = code.replace("class ThisWheel", robot_base_class + "class ThisWheel")
+        fixes_applied.append("Added missing RobotBase class")
+        print(f"[normalize] ✗ VLM skipped RobotBase - restored it")
+    
+    # Additional CAD-specific fixes
+    hyphen_fixes = {
+        r'\.wheelbase_span-mm': '.wheelbase_span_mm',
+        r'\.axle_spacing-mm': '.axle_spacing_mm',
+        r'\.wheel_z_offset-mm': '.wheel_z_offset_mm',
+        r'\.wheel-diameter': '.wheel_diameter',
+        r'\.wheel-width': '.wheel_width',
+    }
+    
+    for pattern, replacement in hyphen_fixes.items():
+        if re.search(pattern, code):
+            code = re.sub(pattern, replacement, code)
+            fixes_applied.append(f"Fixed hyphenated attribute: {pattern} → {replacement}")
+    
+    # Fix undefined 'offsets' variable
+    if re.search(r'for\s+i,\s+off\s+in\s+enumerate\(offsets\)', code):
+        code = re.sub(
+            r'for\s+i,\s+off\s+in\s+enumerate\(offsets\)',
+            'for i, off in enumerate(self._axle_offsets())',
+            code
+        )
+        fixes_applied.append("Fixed undefined 'offsets' → 'self._axle_offsets()'")
+    
+    # Fix _axle_offsets to allow 0 wheels
+    if 'n = max(1, int(round(float(self.wheels_per_side))))' in code:
+        code = code.replace(
+            'n = max(1, int(round(float(self.wheels_per_side))))',
+            'n = max(0, int(round(float(self.wheels_per_side))))'
+        )
+        fixes_applied.append("Fixed _axle_offsets to allow 0 wheels")
+    
+    # Remove trailing incomplete lines
+    lines = code.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        if line.strip().startswith('cq.display.') or \
+           (line.strip().startswith('register(') and 'model=' not in line):
+            continue
+        cleaned_lines.append(line)
+    code = '\n'.join(cleaned_lines)
+    
+    # Detect and truncate VLM hallucinations
+    lines = code.split('\n')
+    class_names_seen = {}
+    truncate_at = None
+    
+    for i, line in enumerate(lines):
+        class_match = re.match(r'^class\s+(\w+)', line)
+        if class_match:
+            class_name = class_match.group(1)
+            if class_name in class_names_seen:
+                truncate_at = class_names_seen[class_name]
+                print(f"[normalize] ✗ Detected VLM hallucination: class '{class_name}' repeated")
+                fixes_applied.append(f"Truncated hallucination: repeated class '{class_name}'")
+                break
+            else:
+                class_names_seen[class_name] = i
+    
+    if truncate_at is not None:
+        code = '\n'.join(lines[:truncate_at])
+        if code and not code.endswith('\n'):
+            code += '\n'
+        code += '\n# === End of generated code ===\n'
+    
+    if fixes_applied:
+        print(f"[normalize] Applied {len(fixes_applied)} CAD-specific fixes")
+    
+    return code
+

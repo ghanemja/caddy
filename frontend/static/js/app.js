@@ -800,7 +800,7 @@ async function loadMeshFile(file, filename) {
         const formData = new FormData();
         formData.append('mesh', file);
         
-        const response = await fetch('/convert_mesh_to_glb', {
+        const response = await fetch('/api/mesh/convert_mesh_to_glb', {
             method: 'POST',
             body: formData
         });
@@ -1900,7 +1900,7 @@ if (ingestMesh) {
             data.append('mesh', file);
 
             // Step 1: Run segmentation only
-            const r = await fetch('/ingest_mesh_segment', { method: 'POST', body: data });
+            const r = await fetch('/api/mesh/ingest_mesh_segment', { method: 'POST', body: data });
             if (!r.ok) {
                 const err = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
                 throw new Error(err.error || `HTTP ${r.status}`);

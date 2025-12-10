@@ -174,7 +174,7 @@ python tests/test_segmentation.py
 | `OLLAMA_URL` | Ollama server URL | `http://127.0.0.1:11434` |
 | `OLLAMA_MODEL` | Ollama model name | `llava:latest` |
 | `POINTNET2_CHECKPOINT` | Path to PointNet++ model | `checkpoints/pointnet2/pointnet2_part_seg_msg.pth` |
-| `SEGMENTATION_BACKEND` | Segmentation backend (`pointnet` or `hunyuan3d`) | `pointnet` |
+| `SEGMENTATION_BACKEND` | Segmentation backend (`pointnet`, `hunyuan3d`, `hunyuan`, `hunyuan-2.1`, or `hunyuan2.1`) | `pointnet` |
 | `KMP_DUPLICATE_LIB_OK` | Fix OpenMP conflicts (macOS) | Not set |
 
 ## Development

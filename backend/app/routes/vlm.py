@@ -33,10 +33,15 @@ def codegen():
     - Saved to generated/robot_base_vlm.py
     - Also creates a backup in generated/robot_base_vlm_TIMESTAMP.py
     """
+    from app.utils.helpers import data_url_from_upload as _data_url_from_upload
+    from app.utils.codegen import (
+        extract_python_module,
+        normalize_generated_code_advanced as _normalize_generated_code_advanced
+    )
+    from app.utils.inspection import baseline_cqparts_source as _baseline_cqparts_source
     from run import (
-        _build_codegen_prompt, _data_url_from_upload,
-        _baseline_cqparts_source, extract_python_module,
-        _normalize_generated_code_advanced, _rebuild_and_save_glb,
+        _build_codegen_prompt,
+        _rebuild_and_save_glb,
         OLLAMA_MODEL
     )
     import time
@@ -181,10 +186,12 @@ def codegen():
 @bp.post("/recommend")
 def recommend():
     """Get VLM recommendations for CAD changes."""
+    from app.utils.helpers import data_url_from_upload as _data_url_from_upload
     from run import (
-        _data_url_from_upload, _cad_state_json,
-        _split_multi_json_and_summaries, VLM_SYSTEM_PROMPT, call_vlm
+        _cad_state_json,
+        _split_multi_json_and_summaries, call_vlm
     )
+    from app.services.vlm.prompts_loader import get_system_prompt
     import json
     
     try:
@@ -220,7 +227,7 @@ def recommend():
             grounding_lines += ["User prompt:", prompt_text]
 
         images = [ref_url, snapshot_url] if snapshot_url else [ref_url]
-        final_prompt = f"{VLM_SYSTEM_PROMPT}\n\n---\n" + "\n".join(grounding_lines)
+        final_prompt = f"{get_system_prompt()}\n\n---\n" + "\n".join(grounding_lines)
 
         provider_out = call_vlm(final_prompt, images)
         raw = provider_out.get("raw", "")
@@ -247,7 +254,8 @@ def recommend():
 @bp.post("/vlm")
 def vlm():
     """VLM endpoint for parameter extraction."""
-    from run import _data_url_from_upload, VLM_SYSTEM_PROMPT
+    from run import _data_url_from_upload
+    from app.services.vlm.prompts_loader import get_system_prompt
     import json
     import re
     
@@ -262,7 +270,7 @@ def vlm():
         if selected:
             grounding.append(f"\nUser highlighted class: {selected}")
         grounding.append("\nUser prompt:\n" + prompt_text)
-        final_prompt = f"{VLM_SYSTEM_PROMPT}\n\n---\n" + "\n".join(grounding)
+        final_prompt = f"{get_system_prompt()}\n\n---\n" + "\n".join(grounding)
         resp = call_vlm(final_prompt, data_url)
         raw = resp.get("raw", "")
         parsed = None

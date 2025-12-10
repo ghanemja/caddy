@@ -12,10 +12,8 @@ import threading
 import requests
 from pathlib import Path
 
-# Import prompts from run.py (will be moved to vlm_prompts.py later)
-# For now, import them to avoid circular dependencies
-VLM_SYSTEM_PROMPT = None
-VLM_CODEGEN_PROMPT = None
+# Import prompts from vlm/prompts_loader
+from app.services.vlm.prompts_loader import get_system_prompt, get_codegen_prompt
 
 
 # VLM Configuration
@@ -221,19 +219,9 @@ def call_vlm(
     Returns:
         Dict with "provider" and "raw" response
     """
-    # Import prompts if not provided (from run.py for now)
-    global VLM_SYSTEM_PROMPT, VLM_CODEGEN_PROMPT
-    if VLM_SYSTEM_PROMPT is None or VLM_CODEGEN_PROMPT is None:
-        try:
-            from run import VLM_SYSTEM_PROMPT as _sys, VLM_CODEGEN_PROMPT as _code
-            VLM_SYSTEM_PROMPT = _sys
-            VLM_CODEGEN_PROMPT = _code
-        except ImportError:
-            pass
-    
-    # Use provided prompts or fall back to imported ones
-    system_prompt = vlm_system_prompt or (VLM_CODEGEN_PROMPT if not expect_json else VLM_SYSTEM_PROMPT)
-    codegen_prompt = vlm_codegen_prompt or VLM_CODEGEN_PROMPT
+    # Use provided prompts or load from files
+    system_prompt = vlm_system_prompt or (get_codegen_prompt() if not expect_json else get_system_prompt())
+    codegen_prompt = vlm_codegen_prompt or get_codegen_prompt()
     
     def _normalize(imgs):
         if not imgs:
