@@ -51,6 +51,27 @@
         <label><input type="checkbox" id="gridToggle" checked /> Grid</label>
         <label><input type="checkbox" id="axesToggle" checked /> Axes</label>
       </div>
+      <div class="row">
+        <h4 style="margin: 12px 0 8px 0; font-size: 12px; text-transform: uppercase; color: #5f476e;">Mesh Rotation</h4>
+      </div>
+      <div class="row">
+        <label>Rotate X</label>
+        <input id="meshRotX" type="range" min="0" max="360" value="0" step="1" />
+        <span id="meshRotXVal" class="pill">0°</span>
+      </div>
+      <div class="row">
+        <label>Rotate Y</label>
+        <input id="meshRotY" type="range" min="0" max="360" value="0" step="1" />
+        <span id="meshRotYVal" class="pill">0°</span>
+      </div>
+      <div class="row">
+        <label>Rotate Z</label>
+        <input id="meshRotZ" type="range" min="0" max="360" value="0" step="1" />
+        <span id="meshRotZVal" class="pill">0°</span>
+      </div>
+      <div class="row">
+        <button id="resetMeshRot">Reset Rotation</button>
+      </div>
     </div>
   </div>
 </div>

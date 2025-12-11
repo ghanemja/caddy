@@ -224,7 +224,6 @@ body.right-collapsed {
 
 /* Explicitly ensure Components and Get Suggestions are in right panel ONLY */
 /* Hide ALL instances by default - very aggressive hiding */
-#sectionComponents,
 #recsSection {
   display: none !important;
   visibility: hidden !important;
@@ -240,13 +239,9 @@ body.right-collapsed {
 }
 
 /* Hide from specific containers */
-#left #sectionComponents,
 #left #recsSection,
-#wrap #sectionComponents,
 #wrap #recsSection,
-#canvas #sectionComponents,
 #canvas #recsSection,
-body > #sectionComponents,
 body > #recsSection {
   display: none !important;
   visibility: hidden !important;

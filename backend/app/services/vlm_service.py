@@ -182,6 +182,17 @@ def load_finetuned_model():
     try:
         print(f"[vlm] Loading fine-tuned model from {FINETUNED_MODEL_PATH}...")
         
+        # Try importing scipy first to catch the BLAS error early
+        try:
+            import scipy
+            print(f"[vlm] ✓ scipy available (version: {scipy.__version__})")
+        except (ImportError, OSError) as scipy_err:
+            print(f"[vlm] ⚠ scipy import failed (this may cause issues): {scipy_err}")
+            print("[vlm] To fix scipy BLAS issues on macOS, try:")
+            print("[vlm]   conda install -c conda-forge scipy openblas")
+            print("[vlm]   or: pip uninstall scipy && conda install -c conda-forge scipy")
+            print("[vlm] Continuing anyway - scipy may not be needed for model loading...")
+        
         from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
         from peft import PeftModel
         import torch
@@ -217,12 +228,41 @@ def load_finetuned_model():
         print(f"[vlm] ✓ Fine-tuned model loaded successfully on {device}")
         
     except ImportError as e:
+        error_msg = str(e)
         print(f"[vlm] ✗ Failed to import required libraries: {e}")
         print("[vlm] Install with: pip install transformers peft torch pillow accelerate")
+        
+        # Check if it's a scipy/BLAS issue
+        if "scipy" in error_msg.lower() or "NEWLAPACK" in error_msg or "_fblas" in error_msg:
+            print("\n[vlm] ⚠ This appears to be a scipy BLAS compatibility issue on macOS.")
+            print("[vlm] Fix options:")
+            print("[vlm]   1. Reinstall scipy with conda: conda install -c conda-forge scipy openblas")
+            print("[vlm]   2. Or use pip with openblas: pip uninstall scipy && pip install scipy")
+            print("[vlm]   3. Or disable fine-tuned model: export USE_FINETUNED_MODEL=0")
+        
+        _finetuned_model = None
+        _finetuned_processor = None
+    except (OSError, RuntimeError) as e:
+        error_msg = str(e)
+        # Check for scipy/BLAS errors in runtime exceptions too
+        if "NEWLAPACK" in error_msg or "_fblas" in error_msg or "scipy" in error_msg.lower():
+            print(f"[vlm] ✗ scipy BLAS compatibility error: {e}")
+            print("[vlm] This is a known macOS issue. To fix:")
+            print("[vlm]   conda install -c conda-forge scipy openblas --force-reinstall")
+            print("[vlm] Or set USE_FINETUNED_MODEL=0 to skip VLM features")
+        else:
+            print(f"[vlm] ✗ Failed to load fine-tuned model: {e}")
+            import traceback
+            traceback.print_exc()
         _finetuned_model = None
         _finetuned_processor = None
     except Exception as e:
+        error_msg = str(e)
         print(f"[vlm] ✗ Failed to load fine-tuned model: {e}")
+        # Check for scipy-related errors
+        if "NEWLAPACK" in error_msg or "_fblas" in error_msg or "scipy" in error_msg.lower():
+            print("[vlm] This appears to be a scipy BLAS issue. Try:")
+            print("[vlm]   conda install -c conda-forge scipy openblas --force-reinstall")
         import traceback
         traceback.print_exc()
         _finetuned_model = None

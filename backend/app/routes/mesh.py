@@ -142,9 +142,9 @@ def ingest_mesh_segment():
         for part in segmentation_summary["parts"]:
             name = part['name']
             part_id = part['id']
-            points = part['point_count']
+            point_count = part['point_count']  # Renamed to avoid shadowing 'points' variable
             pct = part['percentage']
-            print(f"[ingest_mesh_segment]   • {name} (ID: {part_id}): {points} points ({pct:.1f}%)")
+            print(f"[ingest_mesh_segment]   • {name} (ID: {part_id}): {point_count} points ({pct:.1f}%)")
         
         # Build PartTable for user labeling
         mesh = trimesh.load(mesh_path)

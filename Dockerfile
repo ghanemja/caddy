@@ -1,4 +1,3 @@
-# Multi-stage build for CAD Optimizer
 FROM python:3.12-slim as base
 
 # Set working directory
@@ -30,6 +29,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend code
 COPY backend/ /app/backend/
 COPY frontend/ /app/frontend/
+COPY start_server.sh /app/start_server.sh
+COPY start_server_container.sh /app/start_server_container.sh
+
+# Make scripts executable
+RUN chmod +x /app/start_server.sh /app/start_server_container.sh
 
 # Create necessary directories
 RUN mkdir -p /app/frontend/assets /app/backend/checkpoints /app/backend/runs
@@ -44,9 +48,9 @@ EXPOSE 5160
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5160/api/state', timeout=5)" || exit 1
 
-# Set working directory to backend
-WORKDIR /app/backend
+# Set working directory to root
+WORKDIR /app
 
-# Run the application
-CMD ["python", "run.py"]
+# Run the application using container-friendly start script
+CMD ["/app/start_server_container.sh"]
 

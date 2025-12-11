@@ -311,6 +311,13 @@ const lockTarget = document.getElementById("lockTarget"),
     axesToggle = document.getElementById("axesToggle");
 const rotLeft = document.getElementById("rotLeft"),
     rotRight = document.getElementById("rotRight");
+const meshRotX = document.getElementById("meshRotX"),
+    meshRotXVal = document.getElementById("meshRotXVal");
+const meshRotY = document.getElementById("meshRotY"),
+    meshRotYVal = document.getElementById("meshRotYVal");
+const meshRotZ = document.getElementById("meshRotZ"),
+    meshRotZVal = document.getElementById("meshRotZVal");
+const resetMeshRot = document.getElementById("resetMeshRot");
 
 // console
 const stream = document.getElementById("consoleStream");
@@ -463,17 +470,30 @@ function resize() {
 window.addEventListener("resize", resize);
 
 function fit() {
-    const box = new THREE.Box3().setFromObject(pivot);
-    const len = box.getSize(new THREE.Vector3()).length();
+    if (!group) return; // Don't fit if there's no mesh loaded
+    
+    const box = new THREE.Box3().setFromObject(group); // Use group instead of pivot for more accurate bounds
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
     const c = box.getCenter(new THREE.Vector3());
-    camera.near = Math.max(0.01, len / 200);
-    camera.far = len * 15;
+    
+    if (maxDim === 0) return; // Don't fit if mesh has no size
+    
+    // Use FOV-based distance calculation for proper zoom (similar to frameBox)
+    const fov = THREE.MathUtils.degToRad(camera.fov);
+    const pad = 0.6; // Reduced padding for much closer zoom
+    const dist = (maxDim * pad) / (2 * Math.tan(fov / 2));
+    
+    camera.near = Math.max(0.01, maxDim / 200);
+    camera.far = Math.max(maxDim * 15, dist * 10);
     camera.updateProjectionMatrix();
-    camera.position
-        .copy(c)
-        .add(new THREE.Vector3(0.6 * len, 0.45 * len, 0.9 * len));
+    
+    // Position camera at isometric angle using the calculated distance
+    const isoDir = new THREE.Vector3(0.6, 0.45, 0.9).normalize();
+    camera.position.copy(c).add(isoDir.multiplyScalar(dist));
     camera.lookAt(c);
     controls.target.copy(c);
+    controls.update(); // Ensure controls are updated
 }
 
 function hashColor(str) {
@@ -842,8 +862,19 @@ async function loadMeshFile(file, filename) {
                     const center = box.getCenter(new THREE.Vector3());
                     group.position.sub(center); // Move to origin
                     
-                    // Store center offset for adjusting PartTable centroids later
+                    // Store center offset and initial rotation for adjusting PartTable centroids later
                     group.userData.centerOffset = center;
+                    group.userData.rotationX = -90; // Default Z-up → Y-up rotation
+                    group.userData.rotationY = 0;
+                    group.userData.rotationZ = 0;
+                    
+                    // Initialize mesh rotation controls
+                    if (meshRotX) meshRotX.value = -90;
+                    if (meshRotXVal) meshRotXVal.textContent = "-90°";
+                    if (meshRotY) meshRotY.value = 0;
+                    if (meshRotYVal) meshRotYVal.textContent = "0°";
+                    if (meshRotZ) meshRotZ.value = 0;
+                    if (meshRotZVal) meshRotZVal.textContent = "0°";
                     
                     pivot.add(group);
                     
@@ -1219,6 +1250,79 @@ resetCam.onclick = () => {
     // optional: also re-center orbit pivot
     controls.target.copy(baselineCam?.target || new THREE.Vector3());
 };
+
+// Mesh rotation controls
+if (meshRotX && meshRotXVal) {
+    meshRotX.oninput = () => {
+        const angle = +meshRotX.value;
+        meshRotXVal.textContent = `${angle}°`;
+        if (group) {
+            group.rotation.x = (angle * Math.PI) / 180;
+            group.userData.rotationX = angle;
+            // Reapply colors if segmentation data exists (to account for rotation)
+            if (segmentationData && segmentationData.part_table) {
+                const centerOffset = group.userData.centerOffset || null;
+                applyPartColorsToMesh(group, segmentationData, centerOffset);
+            }
+        }
+    };
+}
+
+if (meshRotY && meshRotYVal) {
+    meshRotY.oninput = () => {
+        const angle = +meshRotY.value;
+        meshRotYVal.textContent = `${angle}°`;
+        if (group) {
+            group.rotation.y = (angle * Math.PI) / 180;
+            group.userData.rotationY = angle;
+            // Reapply colors if segmentation data exists (to account for rotation)
+            if (segmentationData && segmentationData.part_table) {
+                const centerOffset = group.userData.centerOffset || null;
+                applyPartColorsToMesh(group, segmentationData, centerOffset);
+            }
+        }
+    };
+}
+
+if (meshRotZ && meshRotZVal) {
+    meshRotZ.oninput = () => {
+        const angle = +meshRotZ.value;
+        meshRotZVal.textContent = `${angle}°`;
+        if (group) {
+            group.rotation.z = (angle * Math.PI) / 180;
+            group.userData.rotationZ = angle;
+            // Reapply colors if segmentation data exists (to account for rotation)
+            if (segmentationData && segmentationData.part_table) {
+                const centerOffset = group.userData.centerOffset || null;
+                applyPartColorsToMesh(group, segmentationData, centerOffset);
+            }
+        }
+    };
+}
+
+if (resetMeshRot) {
+    resetMeshRot.onclick = () => {
+        if (group) {
+            group.rotation.x = -Math.PI / 2; // Reset to default Z-up → Y-up
+            group.rotation.y = 0;
+            group.rotation.z = 0;
+            group.userData.rotationX = -90;
+            group.userData.rotationY = 0;
+            group.userData.rotationZ = 0;
+            if (meshRotX) meshRotX.value = -90;
+            if (meshRotXVal) meshRotXVal.textContent = "-90°";
+            if (meshRotY) meshRotY.value = 0;
+            if (meshRotYVal) meshRotYVal.textContent = "0°";
+            if (meshRotZ) meshRotZ.value = 0;
+            if (meshRotZVal) meshRotZVal.textContent = "0°";
+            // Reapply colors if segmentation data exists
+            if (segmentationData && segmentationData.part_table) {
+                const centerOffset = group.userData.centerOffset || null;
+                applyPartColorsToMesh(group, segmentationData, centerOffset);
+            }
+        }
+    };
+}
 
 rotLeft.onclick = () => {
     pivot.rotateY(+Math.PI / 2);
@@ -1606,9 +1710,29 @@ function applyPartColorsToMesh(meshGroup, segData, centerOffset = null) {
                     const z = positions[i * 3 + 2];
                     
                     // Find which part this vertex belongs to using centroid distance
-                    // Centroids need to be adjusted for mesh centering
+                    // Centroids need to be adjusted for mesh centering and rotation
                     let assignedPartId = null;
                     let minDist = Infinity;
+                    
+                    // Get mesh rotation from userData
+                    const rotX = meshGroup.userData?.rotationX || 0;
+                    const rotY = meshGroup.userData?.rotationY || 0;
+                    const rotZ = meshGroup.userData?.rotationZ || 0;
+                    
+                    // Create rotation matrix for inverse rotation (to transform vertex back to original space)
+                    const euler = new THREE.Euler(
+                        (rotX * Math.PI) / 180,
+                        (rotY * Math.PI) / 180,
+                        (rotZ * Math.PI) / 180,
+                        'XYZ'
+                    );
+                    const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(euler);
+                    const inverseMatrix = new THREE.Matrix4().copy(rotationMatrix).invert();
+                    
+                    // Transform vertex position back to original space (inverse rotation)
+                    const vertexPos = new THREE.Vector3(x, y, z);
+                    vertexPos.applyMatrix4(inverseMatrix);
+                    
                     for (const part of parts) {
                         let centroid = part.centroid || [0, 0, 0];
                         // Adjust centroid by center offset if mesh was centered
@@ -1620,9 +1744,9 @@ function applyPartColorsToMesh(meshGroup, segData, centerOffset = null) {
                             ];
                         }
                         const dist = Math.sqrt(
-                            Math.pow(x - centroid[0], 2) +
-                            Math.pow(y - centroid[1], 2) +
-                            Math.pow(z - centroid[2], 2)
+                            Math.pow(vertexPos.x - centroid[0], 2) +
+                            Math.pow(vertexPos.y - centroid[1], 2) +
+                            Math.pow(vertexPos.z - centroid[2], 2)
                         );
                         if (dist < minDist) {
                             minDist = dist;
