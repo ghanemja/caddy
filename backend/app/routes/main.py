@@ -81,6 +81,34 @@ def demo_stl():
     )
 
 
+@bp.route("/assets/<path:filename>")
+def serve_assets(filename):
+    """Serve files from frontend/assets directory."""
+    from run import ASSETS_DIR
+
+    file_path = os.path.join(ASSETS_DIR, filename)
+    if not os.path.exists(file_path):
+        abort(404)
+
+    # Determine mimetype based on extension
+    if filename.endswith(".glb"):
+        mimetype = "model/gltf-binary"
+    elif filename.endswith(".gltf"):
+        mimetype = "model/gltf+json"
+    elif filename.endswith(".png"):
+        mimetype = "image/png"
+    elif filename.endswith(".jpg") or filename.endswith(".jpeg"):
+        mimetype = "image/jpeg"
+    elif filename.endswith(".stl"):
+        mimetype = "model/stl"
+    elif filename.endswith(".obj"):
+        mimetype = "model/obj"
+    else:
+        mimetype = None
+
+    return send_file(file_path, mimetype=mimetype)
+
+
 @bp.route("/static/<path:filename>")
 def custom_static(filename):
     """Serve static files."""

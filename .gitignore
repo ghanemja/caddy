@@ -1,17 +1,3 @@
-# Large installer/binary files (should not be in git)
-*.AppImage
-Miniforge3-*.sh
-
-# Extracted/unpacked directories (too many files)
-squashfs-root/
-
-# Model training runs (large files)
-runs/
-
-# Pretrained model files (large binary files)
-models/pointnet2/*.pth
-models/pointnet2/*.pt
-
 # Conda temporary files
 condaenv.*.requirements.txt
 

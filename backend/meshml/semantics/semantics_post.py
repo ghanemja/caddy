@@ -19,6 +19,7 @@ from .semantics_pre import PreVLMOutput
 @dataclass
 class PostVLMOutput:
     """Output from post-VLM step."""
+
     final_parameters: List[FinalParameter]
     raw_response: Dict[str, Any]
 
@@ -33,14 +34,14 @@ def refine_parameters_with_vlm(
 ) -> PostVLMOutput:
     """
     Use the VLM to propose semantic names for generic raw parameters (p1, p2, ...).
-    
+
     Args:
         image_paths: list of paths to rendered images (optional, for context)
         pre_output: output from pre-VLM step (category + candidate params)
         raw_parameters: raw geometric parameters with generic IDs (p1, p2, p3, ...)
         vlm: VLM client instance
         part_labels: optional list of detected part names from segmentation
-        
+
     Returns:
         PostVLMOutput with proposed semantic parameters
     """
@@ -104,16 +105,19 @@ Your tasks:
         if p.part_labels:
             param_dict["part_labels"] = p.part_labels
         raw_params_data.append(param_dict)
-    
+
     raw_params_str = json.dumps(raw_params_data, indent=2)
-    
+
     # Build part labels info - prioritize user-provided labels from PartTable
     part_info = ""
     if part_table:
         # Use user-provided labels from PartTable
         named_parts = part_table.get_named_parts()
         if named_parts:
-            part_names = [f"{name} (part_id: {info.part_id})" for name, info in named_parts.items()]
+            part_names = [
+                f"{name} (part_id: {info.part_id})"
+                for name, info in named_parts.items()
+            ]
             part_info = f"\nUser-labeled parts: {', '.join(part_names)}"
         else:
             # Fallback to part IDs if no names assigned
@@ -129,7 +133,7 @@ Your tasks:
                 unique_parts.update(p.part_labels)
         if unique_parts:
             part_info = f"\nDetected parts: {', '.join(sorted(unique_parts))}"
-    
+
     schema_hint = """{
   "parameters": [
     {
@@ -140,13 +144,18 @@ Your tasks:
     }
   ]
 }"""
-    
+
     # Build candidate parameters context (if available)
     candidate_params_str = ""
     if pre_output.candidate_parameters:
-        candidate_list = [f"- {p.name}: {p.description}" for p in pre_output.candidate_parameters[:10]]
-        candidate_params_str = f"\n\nCandidate semantic names from previous step:\n" + "\n".join(candidate_list)
-    
+        candidate_list = [
+            f"- {p.name}: {p.description}" for p in pre_output.candidate_parameters[:10]
+        ]
+        candidate_params_str = (
+            f"\n\nCandidate semantic names from previous step:\n"
+            + "\n".join(candidate_list)
+        )
+
     user_message = f"""Object category: {pre_output.category}
 Parts identified: {', '.join(pre_output.parts) if pre_output.parts else 'None specified'}{part_info}{candidate_params_str}
 
@@ -163,13 +172,13 @@ Return ONLY valid JSON matching the specified structure."""
 
     # Prepare images (optional, for context)
     images = [VLMImage(path=path) for path in image_paths] if image_paths else None
-    
+
     # Build messages
     messages = [
         VLMMessage(role="system", content=system_prompt),
         VLMMessage(role="user", content=user_message),
     ]
-    
+
     # Call VLM
     try:
         response = vlm.complete_json(
@@ -181,23 +190,23 @@ Return ONLY valid JSON matching the specified structure."""
         print(f"[Post-VLM] Error calling VLM: {e}")
         # Fallback: create default mappings
         return _fallback_parameter_mapping(pre_output, raw_parameters)
-    
+
     # Parse response
     try:
         # VLM returns parameters array with proposed names
         proposed_params_raw = response.get("parameters", [])
         final_params = []
-        
+
         # Create a lookup for raw parameters by ID
         raw_param_lookup = {p.id: p for p in raw_parameters}
-        
+
         for param in proposed_params_raw:
             if isinstance(param, dict):
                 param_id = param.get("id", "")
                 proposed_name = param.get("proposed_name", "")
                 proposed_description = param.get("proposed_description", "")
                 confidence = param.get("confidence", 0.5)
-                
+
                 # Find the corresponding raw parameter
                 raw_param = raw_param_lookup.get(param_id)
                 if raw_param and proposed_name:
@@ -210,17 +219,21 @@ Return ONLY valid JSON matching the specified structure."""
                             description=proposed_description or raw_param.description,
                             confidence=float(confidence),
                             raw_sources=[param_id],  # Typically just the ID itself
+                            part_labels=(
+                                raw_param.part_labels if raw_param.part_labels else []
+                            ),  # Copy part labels from raw parameter
                         )
                     )
-        
+
         return PostVLMOutput(
             final_parameters=final_params,
             raw_response=response,
         )
-    
+
     except Exception as e:
         print(f"[Post-VLM] Error parsing response: {e}")
         import traceback
+
         traceback.print_exc()
         # Fallback
         return _fallback_parameter_mapping(pre_output, raw_parameters)
@@ -232,18 +245,18 @@ def _fallback_parameter_mapping(
 ) -> PostVLMOutput:
     """
     Fallback heuristic: create default parameter mappings with generic names.
-    
+
     This is used when VLM response is malformed or unavailable.
     """
     final_params = []
-    
+
     # Use first few candidate params as semantic names, or generate generic ones
     for i, raw in enumerate(raw_parameters[:10]):  # Limit to first 10
         if i < len(pre_output.candidate_parameters):
             semantic_name = pre_output.candidate_parameters[i].name
         else:
             semantic_name = f"param_{i+1}"  # Generic fallback
-        
+
         final_params.append(
             FinalParameter(
                 id=raw.id,
@@ -253,9 +266,12 @@ def _fallback_parameter_mapping(
                 description=raw.description,
                 confidence=0.3,  # Low confidence for fallback
                 raw_sources=[raw.id],
+                part_labels=(
+                    raw.part_labels if raw.part_labels else []
+                ),  # Copy part labels from raw parameter
             )
         )
-    
+
     return PostVLMOutput(
         final_parameters=final_params,
         raw_response={"fallback": True},
@@ -265,17 +281,17 @@ def _fallback_parameter_mapping(
 def build_user_review_payload(final_parameters: List[FinalParameter]) -> Dict[str, Any]:
     """
     Build a JSON-ready structure for frontend user review/confirmation.
-    
+
     Each item contains:
     - id (p1, p2, p3, ...)
     - proposed semantic name
     - proposed description
     - confidence
     - value + units
-    
+
     Args:
         final_parameters: List of FinalParameter objects with proposed semantic names
-        
+
     Returns:
         Dictionary ready for JSON serialization
     """
@@ -292,4 +308,3 @@ def build_user_review_payload(final_parameters: List[FinalParameter]) -> Dict[st
             for param in final_parameters
         ]
     }
-

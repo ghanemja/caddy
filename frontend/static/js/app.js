@@ -168,7 +168,7 @@ function project2(basis, v, origin) {
 // replace old makeTextSprite
 function makeTextSprite(
     text,
-    { fontSize = 128, pad = 16, worldScale = 0.5, color = "#0f172a" } = {}
+    { fontSize = 128, pad = 16, worldScale = 0.5, color = "#0f172a", backgroundColor = null } = {}
 ) {
     const cvs = document.createElement("canvas");
     const ctx = cvs.getContext("2d");
@@ -179,26 +179,42 @@ function makeTextSprite(
     cvs.height = h * 2;
     const g = cvs.getContext("2d");
     g.scale(2, 2);
-    g.fillStyle = "rgba(255,255,255,0.96)";
-    g.strokeStyle = "rgba(0,0,0,0.18)";
-    g.lineWidth = 1.2;
-    g.beginPath();
-    const r = 8;
-    g.roundRect ? g.roundRect(0, 0, w, h, r) : g.rect(0, 0, w, h);
-    g.fill();
-    g.stroke();
+    
+    // Draw background if provided
+    if (backgroundColor) {
+        g.fillStyle = backgroundColor;
+        g.beginPath();
+        const r = 8;
+        g.roundRect ? g.roundRect(0, 0, w, h, r) : g.rect(0, 0, w, h);
+        g.fill();
+    } else {
+        g.fillStyle = "rgba(255,255,255,0.96)";
+        g.strokeStyle = "rgba(0,0,0,0.18)";
+        g.lineWidth = 1.2;
+        g.beginPath();
+        const r = 8;
+        g.roundRect ? g.roundRect(0, 0, w, h, r) : g.rect(0, 0, w, h);
+        g.fill();
+        g.stroke();
+    }
+    
     g.fillStyle = color; // Use provided color or default to dark
     g.font = `${fontSize}px system-ui,-apple-system,Segoe UI,Roboto,sans-serif`;
     g.textBaseline = "middle";
     g.fillText(text, pad, h / 2);
 
-    const tex = new THREE.CanvasTexture(cvs);
-    tex.needsUpdate = true;
-    const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
-    const spr = new THREE.Sprite(mat);
-    spr.scale.set(w * worldScale, h * worldScale, 1);
-    spr.renderOrder = 999;
-    return spr;
+        const tex = new THREE.CanvasTexture(cvs);
+        tex.needsUpdate = true;
+        const mat = new THREE.SpriteMaterial({ 
+            map: tex, 
+            depthTest: false,
+            transparent: true,
+            opacity: 0.7  // Start semi-transparent
+        });
+        const spr = new THREE.Sprite(mat);
+        spr.scale.set(w * worldScale, h * worldScale, 1);
+        spr.renderOrder = 999;
+        return spr;
 }
 function buildLabelCallout(key, center, bboxDiag) {
     const group = new THREE.Group();
@@ -287,6 +303,7 @@ const nameEl = document.getElementById("name"),
     logEl = document.getElementById("log"),
     modeHint = document.getElementById("modeHint");
 const compList = document.getElementById("compList"),
+    parametersContent = document.getElementById("parametersContent"),
     toggleLabels = document.getElementById("toggleLabels");
 const fitAllBtn = document.getElementById("fitAll");
 const fov = document.getElementById("fov"),
@@ -715,6 +732,156 @@ function syncSidebar() {
         }
     }
     adjustColumns();
+}
+
+// Update parameters viewer in right panel
+function updateParametersViewer(result) {
+    if (!parametersContent) return;
+    
+    const proposedParams = result.proposed_parameters || result.final_parameters || [];
+    const rawParams = result.raw_parameters || [];
+    
+    if (proposedParams.length === 0 && rawParams.length === 0) {
+        parametersContent.innerHTML = '<div style="text-align: center; color: #94a3b8; padding: 20px;">No parameters extracted yet.</div>';
+        return;
+    }
+    
+    let html = '';
+    
+    // Show category if available
+    if (result.category) {
+        html += `<div style="margin-bottom: 12px; padding: 8px; background: #f3ebf7; border-radius: 6px; border-left: 3px solid #5f476e;">`;
+        html += `<strong style="color: #5f476e;">Category:</strong> <span style="color: #1e293b;">${result.category}</span>`;
+        html += `</div>`;
+    }
+    
+    // Show semantic parameters grouped by part
+    if (proposedParams.length > 0) {
+        html += `<div style="margin-bottom: 12px;">`;
+        html += `<h4 style="font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #1e293b;">Semantic Parameters</h4>`;
+        
+        // Group parameters by part if part_labels are available
+        const paramsByPart = {};
+        proposedParams.forEach(p => {
+            const partLabels = p.part_labels || [];
+            if (partLabels.length > 0) {
+                partLabels.forEach(partLabel => {
+                    if (!paramsByPart[partLabel]) {
+                        paramsByPart[partLabel] = [];
+                    }
+                    paramsByPart[partLabel].push(p);
+                });
+            } else {
+                if (!paramsByPart['_global']) {
+                    paramsByPart['_global'] = [];
+                }
+                paramsByPart['_global'].push(p);
+            }
+        });
+        
+        // Display parameters grouped by part
+        Object.keys(paramsByPart).forEach(partLabel => {
+            if (partLabel !== '_global') {
+                html += `<div style="margin-bottom: 8px; padding: 6px; background: #f8fafc; border-radius: 4px; border-left: 2px solid #3b82f6;">`;
+                html += `<div style="font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 4px;">${partLabel}</div>`;
+            }
+            
+            paramsByPart[partLabel].forEach(p => {
+                const units = p.units ? ` ${p.units}` : '';
+                const conf = p.confidence ? ` <span style="color: #64748b; font-size: 10px;">(${(p.confidence * 100).toFixed(0)}%)</span>` : '';
+                const semanticName = p.semantic_name || p.proposed_name || p.name || 'unnamed';
+                const paramId = p.id || '?';
+                const value = typeof p.value === 'number' ? p.value.toFixed(4) : p.value;
+                
+                html += `<div style="margin: 3px 0; padding: 6px; background: ${partLabel === '_global' ? '#f8fafc' : '#ffffff'}; border-radius: 3px; font-size: 11px;">`;
+                html += `<div style="font-weight: 600; color: #1e40af;">${semanticName}</div>`;
+                html += `<div style="color: #475569; margin-top: 2px;">ID: ${paramId} | Value: <strong>${value}${units}</strong>${conf}</div>`;
+                if (p.description) {
+                    html += `<div style="color: #64748b; font-size: 10px; margin-top: 2px; font-style: italic;">${p.description}</div>`;
+                }
+                html += `</div>`;
+            });
+            
+            if (partLabel !== '_global') {
+                html += `</div>`;
+            }
+        });
+        
+        html += `</div>`;
+    }
+    
+    // Show raw parameters summary
+    if (rawParams.length > 0) {
+        html += `<div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #e2e8f0;">`;
+        html += `<h4 style="font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #1e293b;">Raw Parameters (${rawParams.length} total)</h4>`;
+        html += `<div style="font-size: 11px; color: #64748b; margin-bottom: 8px;">Showing first 5:</div>`;
+        rawParams.slice(0, 5).forEach(p => {
+            const units = p.units ? ` ${p.units}` : '';
+            const value = typeof p.value === 'number' ? p.value.toFixed(4) : p.value;
+            html += `<div style="margin: 3px 0; padding: 4px; background: #f1f5f9; border-radius: 3px; font-size: 11px;">`;
+            html += `<span style="font-weight: 600; color: #475569;">${p.id || '?'}</span>: ${value}${units}`;
+            html += `</div>`;
+        });
+        if (rawParams.length > 5) {
+            html += `<div style="font-size: 10px; color: #94a3b8; margin-top: 4px;">... and ${rawParams.length - 5} more</div>`;
+        }
+        html += `</div>`;
+    }
+    
+    parametersContent.innerHTML = html;
+}
+
+// Update components viewer to show parameter assignments
+function updateComponentsViewer(result) {
+    if (!compList || !segmentationData) return;
+    
+    const proposedParams = result.proposed_parameters || result.final_parameters || [];
+    const parts = segmentationData.part_table?.parts || [];
+    
+    // Build a map of part name to parameters
+    const partParamsMap = {};
+    proposedParams.forEach(p => {
+        const partLabels = p.part_labels || [];
+        partLabels.forEach(partLabel => {
+            if (!partParamsMap[partLabel]) {
+                partParamsMap[partLabel] = [];
+            }
+            partParamsMap[partLabel].push(p);
+        });
+    });
+    
+    // Update component list items to show parameter count
+    [...compList.children].forEach(li => {
+        const partName = li.dataset.key;
+        const partId = li.dataset.partId;
+        
+        // Find matching part name (could be provisional_name or name)
+        const part = parts.find(p => {
+            const pName = p.provisional_name || p.name || `part_${p.part_id}`;
+            return pName === partName || p.part_id.toString() === partId;
+        });
+        
+        if (part) {
+            const partLabel = part.name || part.provisional_name || `part_${part.part_id}`;
+            const params = partParamsMap[partLabel] || [];
+            
+            // Update count to show parameter count
+            const cnt = li.querySelector('.count');
+            if (cnt) {
+                if (params.length > 0) {
+                    cnt.textContent = `${params.length} params`;
+                    cnt.style.background = '#dbeafe';
+                    cnt.style.color = '#1e40af';
+                    cnt.title = `Parameters: ${params.map(p => p.semantic_name || p.proposed_name || p.name).join(', ')}`;
+                } else {
+                    cnt.textContent = partId;
+                    cnt.style.background = '#e2e8f0';
+                    cnt.style.color = '#475569';
+                    cnt.title = '';
+                }
+            }
+        }
+    });
 }
 
 function frameBox(box, { pad = 1.25, duration = 420 } = {}) {
@@ -1161,25 +1328,83 @@ btn.addEventListener('click', async () => {
   let fd = new FormData();
   
   if (isStep4Mode) {
-    // Step 4: Natural language mode - no image required
+    // Step 4: Natural language mode - check if we're working with a mesh
     if (!activePrompt || !activePrompt.value.trim()) {
       alert('Please enter instructions for modifying the shape.');
       return;
     }
     
-    // Automatically capture current model snapshot from canvas
-    try {
-      const snapBlob = await snapshotCanvasToBlob();
-      if (snapBlob) {
-        fd.append('snapshot', new File([snapBlob], 'snapshot.png', { type: 'image/png' }));
-        logLine('Captured current model snapshot automatically');
-      }
-    } catch (e) {
-      console.warn('Failed to capture snapshot:', e);
-      logLine('Warning: Could not capture snapshot, continuing without it', 'warn');
-    }
+    // Check if we have mesh parameters (from mesh ingestion)
+    const hasMeshParams = window.lastIngestResult && window.lastIngestResult.final_parameters;
     
-    fd.append('prompt', activePrompt.value || '');
+    if (hasMeshParams) {
+      // Mesh mode: Use mesh parameter modification endpoint
+      try {
+        const response = await fetch('/api/mesh/modify_mesh_params', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: activePrompt.value.trim(),
+            mesh_path: window.lastIngestResult.mesh_path,
+            current_parameters: window.lastIngestResult.final_parameters || [],
+          }),
+        });
+        
+        const result = await response.json();
+        if (!result.ok) {
+          throw new Error(result.error || 'Failed to modify mesh parameters');
+        }
+        
+        // Update parameter inputs with new values
+        if (result.parameters) {
+          Object.keys(result.parameters).forEach(paramName => {
+            const input = document.getElementById(`param_value_${paramName}`);
+            if (input) {
+              input.value = result.parameters[paramName];
+            }
+          });
+          
+          // Auto-apply the changes
+          if (applyDirectParams) {
+            await applyDirectParams();
+          }
+        }
+        
+        logLine(`VLM modified ${Object.keys(result.parameters || {}).length} parameters`, 'ok');
+        if (statusEl) {
+          statusEl.textContent = `Parameters updated via VLM`;
+          statusEl.style.color = '#5f476e';
+        }
+        btn.textContent = 'Generate Code';
+        btn.disabled = false;
+        return;
+      } catch (e) {
+        console.error('[mesh param modification]', e);
+        logLine(`Error modifying mesh parameters: ${e.message}`, 'err');
+        if (statusEl) {
+          statusEl.textContent = 'Parameter modification failed';
+          statusEl.style.color = '#ef4444';
+        }
+        btn.textContent = 'Generate Code (retry)';
+        btn.disabled = false;
+        return;
+      }
+    } else {
+      // CadQuery mode: Use existing codegen endpoint
+      // Automatically capture current model snapshot from canvas
+      try {
+        const snapBlob = await snapshotCanvasToBlob();
+        if (snapBlob) {
+          fd.append('snapshot', new File([snapBlob], 'snapshot.png', { type: 'image/png' }));
+          logLine('Captured current model snapshot automatically');
+        }
+      } catch (e) {
+        console.warn('Failed to capture snapshot:', e);
+        logLine('Warning: Could not capture snapshot, continuing without it', 'warn');
+      }
+      
+      fd.append('prompt', activePrompt.value || '');
+    }
   } else {
     // Step 1: Legacy mode - image required
   if (!refEl.files[0]) { 
@@ -1674,6 +1899,19 @@ function updateHover() {
         if (hoveredPartId !== null) {
             highlightPart(hoveredPartId);
             
+            // Make label bigger on hover - make it very prominent
+            partLabelSprites.forEach((sprite, partId) => {
+                if (sprite && sprite.userData.baseScale) {
+                    if (partId === hoveredPartId) {
+                        sprite.scale.setScalar(sprite.userData.baseScale * 3.0);  // 3x bigger on hover
+                        sprite.material.opacity = 1.0;  // Make fully opaque
+                    } else {
+                        sprite.scale.setScalar(sprite.userData.baseScale * 0.3);  // Make others smaller
+                        sprite.material.opacity = 0.3;  // Make others semi-transparent
+                    }
+                }
+            });
+            
             // Show part info in status
             if (segmentationData && segmentationData.part_table) {
                 const partInfo = segmentationData.part_table.parts?.find(p => p.part_id === hoveredPartId);
@@ -1682,8 +1920,18 @@ function updateHover() {
                     nameEl.textContent = `${partName} (ID: ${hoveredPartId})`;
                 }
             }
-        } else if (hoveredPartId === null && !hovered) {
-            nameEl.textContent = "—";
+        } else {
+            // Reset all label scales when not hovering
+            partLabelSprites.forEach((sprite) => {
+                if (sprite && sprite.userData.baseScale) {
+                    sprite.scale.setScalar(sprite.userData.baseScale);  // Back to normal size
+                    sprite.material.opacity = 0.7;  // Semi-transparent when not hovering
+                }
+            });
+            
+            if (hoveredPartId === null && !hovered) {
+                nameEl.textContent = "—";
+            }
         }
     }
 }
@@ -1695,7 +1943,8 @@ const partLabelSprites = new Map();
 function getPartColor(partId) {
     const hue = (partId * 137.508) % 360; // Golden angle for color distribution (same as mesh)
     const color = new THREE.Color();
-    color.setHSL(hue / 360, 0.7, 0.5);
+    // Use higher saturation (0.8) and higher lightness (0.65) for more distinct, brighter colors
+    color.setHSL(hue / 360, 0.8, 0.65);
     return color;
 }
 
@@ -1744,15 +1993,19 @@ function placeMeshPartLabels(meshGroup, segData) {
         // Position label above centroid
         const labelPos = pos.clone().add(new THREE.Vector3(0, lift, 0));
         
-        // Create text sprite with matching color
+        // Create text sprite with matching color - make it larger and more visible
         const spr = makeTextSprite(partName, {
-            fontSize: 48,
-            worldScale: 0.08,
-            pad: 12,
+            fontSize: 72,  // Increased from 48
+            worldScale: 0.12,  // Increased from 0.08
+            pad: 16,  // Increased from 12
             color: colorToHex(partColor), // Use part color for text
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',  // Add dark background for visibility
         });
         spr.position.copy(labelPos);
         spr.renderOrder = 1000;
+        spr.userData.partId = partId;
+        spr.userData.baseScale = 0.12;  // Store base scale for hover effect
+        spr.scale.setScalar(0.12);  // Start at normal size, will grow on hover
         
         // Add to scene
         if (pivot) {
@@ -1774,7 +2027,8 @@ function applyPartColorsToMesh(meshGroup, segData, centerOffset = null) {
         const partId = part.part_id;
         // Use consistent color generation based on part ID
         const hue = (partId * 137.508) % 360; // Golden angle for color distribution
-        const color = new THREE.Color().setHSL(hue / 360, 0.7, 0.5);
+        // Use higher saturation (0.8) and higher lightness (0.65) for more distinct, brighter colors
+        const color = new THREE.Color().setHSL(hue / 360, 0.8, 0.65);
         partColors.set(partId, color);
     });
     
@@ -1794,6 +2048,14 @@ function applyPartColorsToMesh(meshGroup, segData, centerOffset = null) {
             
             // Create color attribute for vertices
             const colors = new Float32Array(vertexCount * 3);
+            
+            // Ensure material uses vertex colors and doesn't override with base color
+            obj.material.vertexColors = true;
+            // Make sure the material color is white so vertex colors show through
+            if (obj.material.color) {
+                obj.material.color.set(0xffffff);
+            }
+            obj.material.needsUpdate = true;
             
             // Use vertex labels if available (should match vertex count from PartTable)
             if (vertexLabels.length > 0) {
@@ -1881,7 +2143,21 @@ function applyPartColorsToMesh(meshGroup, segData, centerOffset = null) {
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
             
             // Update material to use vertex colors
-            obj.material.vertexColors = true;
+            // Ensure we're using a material that supports vertex colors
+            if (!obj.material.isMeshStandardMaterial && !obj.material.isMeshPhongMaterial && !obj.material.isMeshLambertMaterial) {
+                // Convert to MeshStandardMaterial if needed
+                const newMaterial = new THREE.MeshStandardMaterial({
+                    vertexColors: true,
+                    side: obj.material.side || THREE.FrontSide,
+                });
+                obj.material = newMaterial;
+            } else {
+                obj.material.vertexColors = true;
+                // Set base color to white so vertex colors show through
+                if (obj.material.color) {
+                    obj.material.color.set(0xffffff);
+                }
+            }
             obj.material.needsUpdate = true;
         }
     });
@@ -1929,6 +2205,177 @@ function highlightPart(partId) {
             }
         }
     });
+}
+
+// Store original vertex colors for highlighting
+let originalVertexColors = null;
+let currentlyHighlightedPartId = null;
+
+// Highlight a specific part and grey out others (for labeling UI)
+function highlightPartForLabeling(partId) {
+    if (!group || !segmentationData) return;
+    
+    // Check if vertex colors are enabled
+    const meshVertexToggle = document.getElementById('meshVertexToggle');
+    if (!meshVertexToggle || !meshVertexToggle.checked) {
+        // Enable vertex colors first
+        toggleMeshVertexView(true);
+        meshVertexToggle.checked = true;
+    }
+    
+    currentlyHighlightedPartId = partId;
+    
+    const parts = segmentationData.part_table?.parts || [];
+    const partInfo = parts.find(p => p.part_id === partId);
+    if (!partInfo) return;
+    
+    // Get the part color
+    const partColor = getPartColor(partId);
+    
+    // Get vertex labels
+    const vertexLabels = segmentationData.vertex_labels || [];
+    
+    // Traverse mesh and modify vertex colors
+    group.traverse((obj) => {
+        if (obj.isMesh && obj.geometry) {
+            const geometry = obj.geometry;
+            let colorAttribute = geometry.getAttribute('color');
+            
+            // If no color attribute exists, create one
+            if (!colorAttribute) {
+                // Reapply part colors first
+                const centerOffset = group.userData.centerOffset || null;
+                applyPartColorsToMesh(group, segmentationData, centerOffset);
+                colorAttribute = geometry.getAttribute('color');
+                if (!colorAttribute) return;
+            }
+            
+            // Store original colors if not already stored
+            if (!originalVertexColors) {
+                originalVertexColors = new Float32Array(colorAttribute.array);
+            }
+            
+            const colors = colorAttribute.array;
+            const vertexCount = colorAttribute.count;
+            
+            // Modify colors: highlight selected part, grey out others
+            for (let i = 0; i < vertexCount; i++) {
+                let vertexPartId = null;
+                
+                if (vertexLabels.length > i) {
+                    vertexPartId = vertexLabels[i];
+                } else {
+                    // Fallback: use spatial lookup (simplified)
+                    const positionAttribute = geometry.getAttribute('position');
+                    if (positionAttribute) {
+                        const x = positionAttribute.array[i * 3];
+                        const y = positionAttribute.array[i * 3 + 1];
+                        const z = positionAttribute.array[i * 3 + 2];
+                        
+                        // Find closest part centroid
+                        let minDist = Infinity;
+                        for (const part of parts) {
+                            const centroid = part.centroid || [0, 0, 0];
+                            const dist = Math.sqrt(
+                                Math.pow(x - centroid[0], 2) +
+                                Math.pow(y - centroid[1], 2) +
+                                Math.pow(z - centroid[2], 2)
+                            );
+                            if (dist < minDist) {
+                                minDist = dist;
+                                vertexPartId = part.part_id;
+                            }
+                        }
+                    }
+                }
+                
+                if (vertexPartId === partId) {
+                    // Highlight this part with full color
+                    colors[i * 3] = partColor.r;
+                    colors[i * 3 + 1] = partColor.g;
+                    colors[i * 3 + 2] = partColor.b;
+                } else {
+                    // Grey out other parts
+                    const grey = 0.3; // Dark grey
+                    colors[i * 3] = grey;
+                    colors[i * 3 + 1] = grey;
+                    colors[i * 3 + 2] = grey;
+                }
+            }
+            
+            colorAttribute.needsUpdate = true;
+        }
+    });
+}
+
+// Clear part highlight and restore original colors
+function clearPartHighlightForLabeling() {
+    if (!group || !originalVertexColors) return;
+    
+    currentlyHighlightedPartId = null;
+    
+    // Restore original colors
+    group.traverse((obj) => {
+        if (obj.isMesh && obj.geometry) {
+            const geometry = obj.geometry;
+            const colorAttribute = geometry.getAttribute('color');
+            
+            if (colorAttribute && originalVertexColors) {
+                const colors = colorAttribute.array;
+                for (let i = 0; i < Math.min(colors.length, originalVertexColors.length); i++) {
+                    colors[i] = originalVertexColors[i];
+                }
+                colorAttribute.needsUpdate = true;
+            }
+        }
+    });
+    
+    // Clear stored original colors
+    originalVertexColors = null;
+}
+
+// Toggle between mesh view and vertex-colored view
+function toggleMeshVertexView(showVertexColors) {
+    if (!group || !segmentationData) return;
+    
+    // Clear any active highlighting first
+    if (currentlyHighlightedPartId !== null) {
+        clearPartHighlightForLabeling();
+    }
+    
+    if (showVertexColors) {
+        // Apply vertex colors (already done by applyPartColorsToMesh)
+        // Just ensure it's applied
+        const centerOffset = group.userData.centerOffset || null;
+        applyPartColorsToMesh(group, segmentationData, centerOffset);
+        
+        // Update toggle checkbox if it exists
+        const meshVertexToggle = document.getElementById('meshVertexToggle');
+        if (meshVertexToggle) {
+            meshVertexToggle.checked = true;
+        }
+    } else {
+        // Show uniform mesh color (remove vertex colors)
+        group.traverse((obj) => {
+            if (obj.isMesh && obj.material) {
+                obj.material.vertexColors = false;
+                obj.material.color.set(0x888888); // Grey color
+                obj.material.needsUpdate = true;
+                
+                // Clear color attribute to save memory
+                const geometry = obj.geometry;
+                if (geometry) {
+                    geometry.deleteAttribute('color');
+                }
+            }
+        });
+        
+        // Update toggle checkbox if it exists
+        const meshVertexToggle = document.getElementById('meshVertexToggle');
+        if (meshVertexToggle) {
+            meshVertexToggle.checked = false;
+        }
+    }
 }
 
 // Clear part highlight
@@ -2242,7 +2689,7 @@ if (ingestMesh) {
             return;
         }
         if (meshIngestStatus) {
-            meshIngestStatus.textContent = 'Running segmentation... (fast, ~1-5 seconds)';
+            meshIngestStatus.textContent = 'Running segmentation... (this should take ~1-5 seconds)';
             meshIngestStatus.style.color = '#64748b';
         }
         if (meshIngestResults) meshIngestResults.style.display = 'none';
@@ -2301,14 +2748,17 @@ if (ingestMesh) {
                     partIdsDisplay.textContent = partInfo || 'No parts found';
                 }
                 
-                // Place labels on mesh parts if mesh is loaded and labels are enabled
-                if (group && document.getElementById("toggleLabels")?.checked) {
-                    setTimeout(() => {
-                        if (segmentationData && segmentationData.part_table) {
-                            placeMeshPartLabels(group, segmentationData);
-                        }
-                    }, 100);
-                }
+                    // Place labels on mesh parts if mesh is loaded and labels are enabled
+                    if (group && document.getElementById("toggleLabels")?.checked) {
+                        setTimeout(() => {
+                            if (segmentationData && segmentationData.part_table) {
+                                placeMeshPartLabels(group, segmentationData);
+                            }
+                        }, 100);
+                    }
+                    
+                    // Update Components sidebar with segmented parts
+                    syncSidebar();
                 
                 // Build labeling UI with colors matching mesh parts
                 let html = '';
@@ -2338,6 +2788,28 @@ if (ingestMesh) {
                     html += `</div>`;
                 });
                 partLabelingList.innerHTML = html;
+                
+                // Add event listeners for part highlighting on input focus
+                parts.forEach(part => {
+                    const partId = part.part_id;
+                    const input = document.getElementById(`part_label_${partId}`);
+                    if (input) {
+                        input.addEventListener('focus', () => {
+                            highlightPartForLabeling(partId);
+                        });
+                        input.addEventListener('blur', () => {
+                            clearPartHighlightForLabeling();
+                        });
+                    }
+                });
+                
+                // Add mesh/vertex toggle listener
+                const meshVertexToggle = document.getElementById('meshVertexToggle');
+                if (meshVertexToggle) {
+                    meshVertexToggle.addEventListener('change', (e) => {
+                        toggleMeshVertexView(e.target.checked);
+                    });
+                }
                 
                 if (submitLabelsBtn) {
                     submitLabelsBtn.style.display = 'block';
@@ -2412,7 +2884,7 @@ if (submitLabelsBtn) {
 
         try {
             // Call step 2 endpoint with labels
-            const r = await fetch('/ingest_mesh_label', {
+            const r = await fetch('/api/mesh/ingest_mesh_label', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -2486,13 +2958,23 @@ if (submitLabelsBtn) {
                 // Store result for later use
                 window.lastIngestResult = result;
                 
+                // Update parameters viewer in right panel
+                updateParametersViewer(result);
+                
+                // Update components viewer with parameter assignments
+                updateComponentsViewer(result);
+                
                 // Move to step 3
                 if (window.updateStepState) {
                     window.updateStepState(3);
                 }
                 
                 // Populate direct parameter inputs in Step 4
-                populateDirectParams(result);
+                if (typeof populateDirectParams === 'function') {
+                    populateDirectParams(result);
+                } else if (window.populateDirectParams) {
+                    window.populateDirectParams(result);
+                }
             } else {
                 if (confirmParamsEmpty) confirmParamsEmpty.style.display = 'block';
                 if (confirmParamsContent) confirmParamsContent.style.display = 'none';
@@ -2627,7 +3109,7 @@ async function applyDirectParams() {
     }
     
     try {
-        const response = await fetch('/apply_mesh_params', {
+        const response = await fetch('/api/mesh/apply_mesh_params', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2668,8 +3150,65 @@ async function applyDirectParams() {
         
         // Reload the model if GLB path is provided
         if (result.glb_path) {
-            // TODO: Load the new mesh into the 3D viewer
-            logLine('New mesh available. Reload viewer to see changes.', 'warn');
+            // Load the deformed mesh into the 3D viewer
+            try {
+                const loader = new GLTFLoader();
+                // Convert path to URL (glb_path is relative to frontend/assets/)
+                let glbUrl = result.glb_path;
+                if (glbUrl.includes('frontend/assets/')) {
+                    glbUrl = glbUrl.replace(/.*frontend\/assets\//, '/assets/');
+                } else if (!glbUrl.startsWith('/')) {
+                    glbUrl = '/assets/' + glbUrl.replace(/^.*\//, '');
+                }
+                glbUrl += '?ts=' + Date.now();
+                
+                loader.load(
+                    glbUrl,
+                    (g) => {
+                        // Remove old mesh
+                        if (group) {
+                            pivot.remove(group);
+                            group.traverse(obj => {
+                                if (obj.geometry) obj.geometry.dispose();
+                                if (obj.material) obj.material.dispose();
+                            });
+                        }
+                        
+                        // Add new mesh
+                        group = g.scene;
+                        group.rotation.x = -Math.PI / 2; // Z-up → Y-up
+                        setDefaultIfMissing(group);
+                        
+                        // Center mesh at origin (same as original load)
+                        const box = new THREE.Box3().setFromObject(group);
+                        const center = box.getCenter(new THREE.Vector3());
+                        group.position.sub(center);
+                        group.userData.centerOffset = center;
+                        
+                        pivot.add(group);
+                        
+                        // Reapply part colors if we have segmentation data
+                        if (segmentationData && segmentationData.part_table) {
+                            applyPartColorsToMesh(group, segmentationData, center);
+                        }
+                        
+                        placeLabels();
+                        syncSidebar();
+                        setTimeout(() => {
+                            fit();
+                        }, 100);
+                        logLine('Deformed mesh loaded into viewer', 'ok');
+                    },
+                    undefined,
+                    (err) => {
+                        console.error('[applyDirectParams] Failed to load deformed mesh:', err);
+                        logLine(`Failed to load deformed mesh: ${err.message}`, 'err');
+                    }
+                );
+            } catch (e) {
+                console.error('[applyDirectParams] Error loading mesh:', e);
+                logLine(`Error loading mesh: ${e.message}`, 'err');
+            }
         }
         
     } catch (e) {
@@ -2678,6 +3217,49 @@ async function applyDirectParams() {
         alert(`Error: ${e.message}`);
     }
 }
+
+// Populate direct parameter inputs from VLM analysis result
+function populateDirectParams(result) {
+    const directParamsList = document.getElementById('directParamsList');
+    const applyDirectParamsBtn = document.getElementById('applyDirectParams');
+    
+    if (!directParamsList) return;
+    
+    const proposedParams = result.proposed_parameters || result.final_parameters || [];
+    
+    if (proposedParams.length === 0) {
+        directParamsList.innerHTML = '<div style="font-size: 12px; color: #94a3b8; font-style: italic; text-align: center; padding: 20px;">No parameters extracted yet. Complete Step 3 to see parameters here.</div>';
+        if (applyDirectParamsBtn) applyDirectParamsBtn.style.display = 'none';
+        return;
+    }
+    
+    let html = '';
+    proposedParams.forEach(p => {
+        const semanticName = p.semantic_name || p.proposed_name || p.name || p.id;
+        const value = typeof p.value === 'number' ? p.value : parseFloat(p.value) || 0;
+        const units = p.units || 'm';
+        const description = p.description || '';
+        const conf = p.confidence ? ` (${(p.confidence * 100).toFixed(0)}% confidence)` : '';
+        const partLabels = p.part_labels && p.part_labels.length > 0 ? ` [${p.part_labels.join(', ')}]` : '';
+        
+        html += `<div style="margin-bottom: 12px; padding: 8px; background: #f8fafc; border-radius: 6px; border-left: 3px solid #3b82f6;">`;
+        html += `<label style="display: block; font-weight: 600; color: #1e293b; margin-bottom: 4px; font-size: 12px;">${semanticName}${partLabels}${conf}</label>`;
+        if (description) {
+            html += `<div style="font-size: 11px; color: #64748b; margin-bottom: 6px;">${description}</div>`;
+        }
+        html += `<div style="display: flex; align-items: center; gap: 8px;">`;
+        html += `<input type="number" id="param_value_${semanticName}" value="${value.toFixed(4)}" step="0.01" style="flex: 1; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px;" />`;
+        html += `<span style="font-size: 11px; color: #64748b; min-width: 30px;">${units}</span>`;
+        html += `</div>`;
+        html += `</div>`;
+    });
+    
+    directParamsList.innerHTML = html;
+    if (applyDirectParamsBtn) applyDirectParamsBtn.style.display = 'block';
+}
+
+// Make it available globally
+window.populateDirectParams = populateDirectParams;
 
 // Set up apply direct params button
 const applyDirectParamsBtn = document.getElementById('applyDirectParams');

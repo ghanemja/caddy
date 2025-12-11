@@ -387,7 +387,7 @@ def ingest_mesh_label():
             sys.path.insert(0, parent_dir)
 
         from meshml.segmentation import create_segmentation_backend
-        from meshml.semantics.vlm_client_finetuned import FinetunedVLMClient
+        from app.services.vlm_client_finetuned import FinetunedVLMClient
         from meshml.semantics.vlm_client_ollama import OllamaVLMClient
         from meshml.semantics.vlm_client import DummyVLMClient
         from meshml.semantics.ingest_mesh import ingest_mesh_to_semantic_params
@@ -488,11 +488,15 @@ def ingest_mesh_label():
         print(f"[ingest_mesh_label] Running VLM-based semantic parameter extraction...")
         ingest_result = ingest_mesh_to_semantic_params(
             mesh_path=mesh_path,
-            part_table=part_table,
             vlm=vlm,
-            render_dir=render_dir,
-            device=device,
+            model=model,  # Segmentation backend
+            render_output_dir=render_dir,
+            num_points=2048,
         )
+
+        # Override the part_table with the user-labeled one
+        if ingest_result and part_table:
+            ingest_result.part_table = part_table
 
         # Cache result for /apply_mesh_params
         _INGEST_RESULT_CACHE[mesh_path] = ingest_result
@@ -503,12 +507,63 @@ def ingest_mesh_label():
             f"[ingest_mesh_label]   Parameters: {len(ingest_result.final_parameters)} semantic params"
         )
 
+        # Convert FinalParameter objects to dicts for JSON serialization
+        def final_param_to_dict(fp):
+            """Convert FinalParameter to dict."""
+            part_labels = getattr(fp, "part_labels", None) or []
+            # Map part IDs to part names if we have part_table
+            if part_labels and ingest_result.part_table:
+                named_labels = []
+                for label in part_labels:
+                    # Try to find part by name or ID
+                    part = ingest_result.part_table.get_part_by_name(label)
+                    if not part:
+                        # Try to parse as part_id
+                        try:
+                            part_id = int(label.replace("part_", ""))
+                            part = ingest_result.part_table.parts.get(part_id)
+                        except:
+                            pass
+                    if part:
+                        named_labels.append(part.name or part.provisional_name or label)
+                    else:
+                        named_labels.append(label)
+                part_labels = named_labels
+
+            return {
+                "id": fp.id,
+                "semantic_name": fp.semantic_name,
+                "proposed_name": fp.semantic_name,  # Alias for compatibility
+                "name": fp.semantic_name,  # Alias for compatibility
+                "value": float(fp.value),
+                "units": fp.units,
+                "description": fp.description,
+                "confidence": float(fp.confidence) if fp.confidence else 0.0,
+                "part_labels": part_labels,  # Include part labels (mapped to names if possible)
+            }
+
+        def raw_param_to_dict(rp):
+            """Convert RawParameter to dict."""
+            return {
+                "id": rp.id,
+                "value": float(rp.value),
+                "units": rp.units,
+                "description": rp.description,
+            }
+
         # Return results
         response_data = {
             "ok": True,
             "category": ingest_result.category,
-            "final_parameters": ingest_result.final_parameters,
-            "raw_parameters": ingest_result.raw_parameters,
+            "final_parameters": [
+                final_param_to_dict(fp) for fp in ingest_result.final_parameters
+            ],
+            "proposed_parameters": [
+                final_param_to_dict(fp) for fp in ingest_result.final_parameters
+            ],  # Alias
+            "raw_parameters": [
+                raw_param_to_dict(rp) for rp in ingest_result.raw_parameters
+            ],
             "mesh_path": mesh_path,
         }
 
@@ -552,6 +607,160 @@ def ingest_mesh():
         ),
         400,
     )
+
+
+@bp.post("/modify_mesh_params")
+def modify_mesh_params():
+    """
+    Use VLM to modify mesh parameters based on natural language instructions.
+
+    Expects JSON: {
+        "prompt": "natural language instruction",
+        "mesh_path": "...",  # Optional, will use cached if not provided
+        "current_parameters": [ ... ]  # Current parameter values
+    }
+    Returns: { "ok": True, "parameters": { "param_name": new_value, ... } }
+    """
+    from run import _INGEST_RESULT_CACHE
+
+    try:
+        data = request.get_json()
+        if not data or "prompt" not in data:
+            return (
+                jsonify({"ok": False, "error": "Missing 'prompt' in request"}),
+                400,
+            )
+
+        prompt = data.get("prompt", "").strip()
+        if not prompt:
+            return (
+                jsonify({"ok": False, "error": "Prompt cannot be empty"}),
+                400,
+            )
+
+        # Get mesh path from request or use cached one
+        mesh_path = data.get("mesh_path")
+        if not mesh_path:
+            if _INGEST_RESULT_CACHE:
+                mesh_path = list(_INGEST_RESULT_CACHE.keys())[-1]
+            else:
+                return (
+                    jsonify(
+                        {
+                            "ok": False,
+                            "error": "No mesh path provided and no cached ingestion result found.",
+                        }
+                    ),
+                    400,
+                )
+
+        # Get current parameters
+        current_params = data.get("current_parameters", [])
+        if not current_params:
+            ingest_result = _INGEST_RESULT_CACHE.get(mesh_path)
+            if ingest_result:
+                current_params = ingest_result.final_parameters
+
+        # Build parameter context for VLM
+        params_context = ""
+        if current_params:
+            params_list = []
+            for p in current_params[:10]:  # Limit to first 10
+                semantic_name = (
+                    getattr(p, "semantic_name", None)
+                    or getattr(p, "name", None)
+                    or p.get("semantic_name")
+                    or p.get("name", "")
+                )
+                value = getattr(p, "value", None) or p.get("value", 0)
+                units = getattr(p, "units", None) or p.get("units", "m")
+                params_list.append(f"- {semantic_name}: {value} {units}")
+            params_context = "\n".join(params_list)
+
+        # Build VLM prompt
+        vlm_prompt = f"""You are modifying parameters for a 3D mesh object.
+
+Current parameters:
+{params_context}
+
+User instruction: {prompt}
+
+Based on the user's instruction, determine which parameters need to change and by how much.
+Return ONLY valid JSON in this format:
+{{
+  "parameters": {{
+    "parameter_name": new_value,
+    ...
+  }},
+  "reasoning": "brief explanation of changes"
+}}
+
+Example:
+{{
+  "parameters": {{
+    "wing_span": 2.5,
+    "chord_length": 0.3
+  }},
+  "reasoning": "Increased wing span to 2.5m and chord length to 0.3m as requested"
+}}"""
+
+        # Call VLM
+        from app.services.vlm_service import call_vlm
+
+        response = call_vlm(vlm_prompt, None, expect_json=True)
+
+        # Parse VLM response
+        raw = response.get("raw", "")
+        import json
+
+        try:
+            if isinstance(raw, str):
+                parsed = json.loads(raw)
+            else:
+                parsed = raw
+
+            if not isinstance(parsed, dict) or "parameters" not in parsed:
+                raise ValueError("Invalid response format")
+
+            modified_params = parsed.get("parameters", {})
+            reasoning = parsed.get("reasoning", "")
+
+            print(f"[modify_mesh_params] VLM reasoning: {reasoning}")
+            print(f"[modify_mesh_params] Modified parameters: {modified_params}")
+
+            return jsonify(
+                {
+                    "ok": True,
+                    "parameters": modified_params,
+                    "reasoning": reasoning,
+                }
+            )
+        except Exception as e:
+            print(f"[modify_mesh_params] Failed to parse VLM response: {e}")
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": f"Failed to parse VLM response: {str(e)}",
+                        "raw_response": raw[:500] if isinstance(raw, str) else str(raw),
+                    }
+                ),
+                500,
+            )
+
+    except Exception as e:
+        import traceback
+
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": str(e),
+                    "traceback": traceback.format_exc(),
+                }
+            ),
+            500,
+        )
 
 
 @bp.post("/apply_mesh_params")
@@ -648,10 +857,13 @@ def apply_mesh_params():
 
         print(f"[apply_mesh_params] ✓ Deformed mesh saved to {glb_path}")
 
+        # Return URL-accessible path
+        glb_url = "/assets/deformed_mesh.glb"
+
         return jsonify(
             {
                 "ok": True,
-                "glb_path": glb_path,
+                "glb_path": glb_url,  # Return URL path, not filesystem path
                 "message": "Mesh parameters applied successfully",
             }
         )
