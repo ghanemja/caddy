@@ -529,7 +529,16 @@ function buildClassRegistry(root) {
         if (!o.isMesh) return;
         let p = o;
         while (p.parent && !p.name) p = p.parent;
-        const key = classKeyFromName(p.name || o.name || "Unnamed");
+        const name = p.name || o.name || "";
+        
+        // Skip creating registry entries for mesh file names or generic part names
+        // This prevents unwanted labels like "part_part_2" or "qc6stl"
+        if (!name || name.toLowerCase().match(/\.(stl|obj|ply|glb)$/) || 
+            name.toLowerCase().startsWith("part_part") || name.length < 2) {
+            return;
+        }
+        
+        const key = classKeyFromName(name);
         if (!classMap.has(key))
             classMap.set(key, {
                 color: hashColor(key),
@@ -827,15 +836,28 @@ async function loadMeshFile(file, filename) {
                     group = g.scene;
                     group.rotation.x = -Math.PI / 2; // Z-up → Y-up
                     setDefaultIfMissing(group);
+                    
+                    // Center mesh at origin
+                    const box = new THREE.Box3().setFromObject(group);
+                    const center = box.getCenter(new THREE.Vector3());
+                    group.position.sub(center); // Move to origin
+                    
+                    // Store center offset for adjusting PartTable centroids later
+                    group.userData.centerOffset = center;
+                    
                     pivot.add(group);
                     
-                    // Apply part colors if we have segmentation data
+                    // Apply part colors if we have segmentation data (before building class registry)
                     if (segmentationData && segmentationData.part_table) {
-                        applyPartColorsToMesh(group, segmentationData);
+                        applyPartColorsToMesh(group, segmentationData, center);
+                        // Don't build class registry or colorize by class for segmented meshes
+                        // This prevents unwanted labels from mesh node names
+                    } else {
+                        // Only build class registry for non-segmented meshes
+                        buildClassRegistry(group);
+                        colorizeByClass();
                     }
                     
-                    buildClassRegistry(group);
-                    colorizeByClass();
                     placeLabels();
                     syncSidebar();
                     fit();
@@ -1520,7 +1542,7 @@ function placeMeshPartLabels(meshGroup, segData) {
 }
 
 // Apply distinct colors to each part in the mesh based on segmentation
-function applyPartColorsToMesh(meshGroup, segData) {
+function applyPartColorsToMesh(meshGroup, segData, centerOffset = null) {
     if (!meshGroup || !segData || !segData.part_table) return;
     
     const parts = segData.part_table.parts || [];
@@ -1552,9 +1574,11 @@ function applyPartColorsToMesh(meshGroup, segData) {
             // Create color attribute for vertices
             const colors = new Float32Array(vertexCount * 3);
             
-            if (vertexLabels.length > 0 && vertexLabels.length >= vertexCount) {
-                // Use vertex labels directly if available
-                for (let i = 0; i < vertexCount; i++) {
+            // Use vertex labels if available (should match vertex count from PartTable)
+            if (vertexLabels.length > 0) {
+                // Handle case where labels might not exactly match (due to GLB conversion)
+                const labelCount = Math.min(vertexLabels.length, vertexCount);
+                for (let i = 0; i < labelCount; i++) {
                     const partId = vertexLabels[i] || 0;
                     const color = partColors.get(partId) || new THREE.Color(0x888888);
                     
@@ -1562,41 +1586,47 @@ function applyPartColorsToMesh(meshGroup, segData) {
                     colors[i * 3 + 1] = color.g;
                     colors[i * 3 + 2] = color.b;
                 }
+                // Fill remaining vertices with last color if there's a mismatch
+                if (labelCount < vertexCount) {
+                    const lastColor = vertexLabels.length > 0 ? 
+                        (partColors.get(vertexLabels[vertexLabels.length - 1]) || new THREE.Color(0x888888)) :
+                        new THREE.Color(0x888888);
+                    for (let i = labelCount; i < vertexCount; i++) {
+                        colors[i * 3] = lastColor.r;
+                        colors[i * 3 + 1] = lastColor.g;
+                        colors[i * 3 + 2] = lastColor.b;
+                    }
+                }
             } else {
-                // Fallback: use spatial lookup based on vertex positions
+                // Fallback: use spatial lookup based on vertex positions (after centering)
+                // Adjust PartTable centroids by center offset since mesh was centered
                 for (let i = 0; i < vertexCount; i++) {
                     const x = positions[i * 3];
                     const y = positions[i * 3 + 1];
                     const z = positions[i * 3 + 2];
                     
-                    // Find which part's bounding box contains this vertex
+                    // Find which part this vertex belongs to using centroid distance
+                    // Centroids need to be adjusted for mesh centering
                     let assignedPartId = null;
+                    let minDist = Infinity;
                     for (const part of parts) {
-                        const bboxMin = part.bbox_min || [0, 0, 0];
-                        const bboxMax = part.bbox_max || [0, 0, 0];
-                        
-                        if (x >= bboxMin[0] - 0.1 && x <= bboxMax[0] + 0.1 &&
-                            y >= bboxMin[1] - 0.1 && y <= bboxMax[1] + 0.1 &&
-                            z >= bboxMin[2] - 0.1 && z <= bboxMax[2] + 0.1) {
-                            assignedPartId = part.part_id;
-                            break;
+                        let centroid = part.centroid || [0, 0, 0];
+                        // Adjust centroid by center offset if mesh was centered
+                        if (centerOffset) {
+                            centroid = [
+                                centroid[0] - centerOffset.x,
+                                centroid[1] - centerOffset.y,
+                                centroid[2] - centerOffset.z
+                            ];
                         }
-                    }
-                    
-                    // If no part found, use closest centroid
-                    if (assignedPartId === null && parts.length > 0) {
-                        let minDist = Infinity;
-                        for (const part of parts) {
-                            const centroid = part.centroid || [0, 0, 0];
-                            const dist = Math.sqrt(
-                                Math.pow(x - centroid[0], 2) +
-                                Math.pow(y - centroid[1], 2) +
-                                Math.pow(z - centroid[2], 2)
-                            );
-                            if (dist < minDist) {
-                                minDist = dist;
-                                assignedPartId = part.part_id;
-                            }
+                        const dist = Math.sqrt(
+                            Math.pow(x - centroid[0], 2) +
+                            Math.pow(y - centroid[1], 2) +
+                            Math.pow(z - centroid[2], 2)
+                        );
+                        if (dist < minDist) {
+                            minDist = dist;
+                            assignedPartId = part.part_id;
                         }
                     }
                     

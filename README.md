@@ -13,14 +13,14 @@ A web-based CAD viewer and editor that uses Vision Language Models (VLM) for cod
 
 ## Quick Start
 
-### Option 1: Docker (Recommended)
+### Option 1: Podman (Recommended)
 
 ```bash
 # Build the container
-docker build -t cad-optimizer .
+podman build -t cad-optimizer .
 
 # Run the container
-docker run -p 5160:5160 \
+podman run -p 5160:5160 \
   -v $(pwd)/frontend/assets:/app/frontend/assets \
   -v $(pwd)/backend/checkpoints:/app/backend/checkpoints \
   -v $(pwd)/backend/runs:/app/backend/runs \
@@ -119,7 +119,7 @@ export POINTNET2_CHECKPOINT=/path/to/pointnet2_part_seg_msg.pth
 │   ├── static/            # CSS, JS assets
 │   └── templates/         # HTML templates
 ├── assets/                 # Generated assets (GLB files)
-├── Dockerfile              # Docker configuration
+├── Dockerfile              # Container configuration (Podman/Docker compatible)
 ├── start_server.sh         # Startup script
 └── README.md               # This file
 ```
@@ -255,27 +255,27 @@ If PyTorch doesn't detect CUDA:
 - **Model not found**: Check `FINETUNED_MODEL_PATH` environment variable
 - **Ollama not working**: Ensure Ollama server is running: `ollama serve`
 
-## Docker
+## Podman
 
 ### Building
 
 ```bash
-docker build -t cad-optimizer .
+podman build -t cad-optimizer .
 ```
 
 ### Running
 
 ```bash
-docker run -p 5160:5160 \
+podman run -p 5160:5160 \
   -v $(pwd)/frontend/assets:/app/frontend/assets \
   -v $(pwd)/backend/checkpoints:/app/backend/checkpoints \
   -v $(pwd)/backend/runs:/app/backend/runs \
   cad-optimizer
 ```
 
-### Docker Compose (Optional)
+### Podman Compose (Optional)
 
-Create `docker-compose.yml`:
+Create `docker-compose.yml` (compatible with both Docker and Podman):
 ```yaml
 version: '3.8'
 services:

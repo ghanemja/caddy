@@ -35,6 +35,30 @@ app.register_blueprint(test.bp, url_prefix="/test")  # Routes: /test/rotate, /te
 VLM_SYSTEM_PROMPT = get_system_prompt()
 VLM_CODEGEN_PROMPT = get_codegen_prompt()
 
+# Backward compatibility: Export state variables and functions for modules that import from run.py
+from app.core.state import (
+    STATE,
+    CURRENT_PARAMS,
+    CONTEXT,
+    HISTORY,
+    H_PTR,
+    _INGEST_RESULT_CACHE,
+    INIT_SNAPSHOT,
+    PENDING_ADDS,
+    HIDDEN_PREFIXES,
+)
+
+from app.services.state_service import (
+    snapshot_global as _snapshot,
+    ensure_initial_history_global as _ensure_initial_history,
+    restore_global as _restore,
+)
+
+from app.utils.inspection import introspect_params_from_cls as _introspect_params_from_cls
+from app.utils.request_parsing import parse_apply_request as _parse_apply_request
+from app.services.cad_service import rebuild_and_save_glb as _rebuild_and_save_glb
+from app.core.component_registry import COMPONENT_REGISTRY
+
 if __name__ == "__main__":
     import sys
     

@@ -185,15 +185,16 @@ def ingest_mesh_segment():
             print(f"[ingest_mesh_segment] Warning: Could not save visualization: {e}")
             segmentation_summary["visualization_path"] = None
         
-        # Include vertex labels for coloring (convert to list for JSON)
-        vertex_labels_list = vertex_labels.tolist() if hasattr(vertex_labels, 'tolist') else list(vertex_labels)
+        # Include vertex labels for coloring from PartTable (more reliable than raw labels)
+        # PartTable.vertex_part_labels should match the mesh vertex count
+        vertex_labels_for_frontend = part_table.vertex_part_labels.tolist() if hasattr(part_table.vertex_part_labels, 'tolist') else list(part_table.vertex_part_labels)
         
         # Return segmentation results only (user will label parts, then call /ingest_mesh_label)
         response_data = {
             "ok": True,
             "segmentation": segmentation_summary,
             "part_table": part_table_json,
-            "vertex_labels": vertex_labels_list,
+            "vertex_labels": vertex_labels_for_frontend,  # Use PartTable vertex labels (matches mesh)
             "mesh_path": mesh_path,
             "temp_dir": temp_dir,
         }
