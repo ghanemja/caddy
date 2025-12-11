@@ -168,7 +168,7 @@ function project2(basis, v, origin) {
 // replace old makeTextSprite
 function makeTextSprite(
     text,
-    { fontSize = 128, pad = 16, worldScale = 0.5 } = {}
+    { fontSize = 128, pad = 16, worldScale = 0.5, color = "#0f172a" } = {}
 ) {
     const cvs = document.createElement("canvas");
     const ctx = cvs.getContext("2d");
@@ -187,7 +187,7 @@ function makeTextSprite(
     g.roundRect ? g.roundRect(0, 0, w, h, r) : g.rect(0, 0, w, h);
     g.fill();
     g.stroke();
-    g.fillStyle = "#0f172a";
+    g.fillStyle = color; // Use provided color or default to dark
     g.font = `${fontSize}px system-ui,-apple-system,Segoe UI,Roboto,sans-serif`;
     g.textBaseline = "middle";
     g.fillText(text, pad, h / 2);
@@ -546,13 +546,19 @@ function buildClassRegistry(root) {
 }
 
 function placeLabels() {
-    // remove old labels
+    // remove old labels for parametric models
     classMap.forEach((e) => {
         if (e.label) {
             pivot.remove(e.label);
             e.label = null;
         }
     });
+    
+    // Also place labels for mesh parts if segmentation data exists
+    if (segmentationData && group) {
+        placeMeshPartLabels(group, segmentationData);
+    }
+    
     if (!document.getElementById("toggleLabels").checked) return;
 
     // place one centered sprite per component class (no arrows/lines)
@@ -1439,6 +1445,80 @@ function updateHover() {
     }
 }
 
+// Store part labels for mesh parts (separate from parametric model labels)
+const partLabelSprites = new Map();
+
+// Helper function to get color for a part ID (matches mesh coloring)
+function getPartColor(partId) {
+    const hue = (partId * 137.508) % 360; // Golden angle for color distribution (same as mesh)
+    const color = new THREE.Color();
+    color.setHSL(hue / 360, 0.7, 0.5);
+    return color;
+}
+
+// Convert THREE.Color to hex string for CSS
+function colorToHex(color) {
+    return '#' + color.getHexString();
+}
+
+// Place labels for segmented mesh parts
+function placeMeshPartLabels(meshGroup, segData) {
+    // Remove old part labels
+    partLabelSprites.forEach((sprite) => {
+        if (sprite && sprite.parent) {
+            sprite.parent.remove(sprite);
+        }
+    });
+    partLabelSprites.clear();
+    
+    if (!document.getElementById("toggleLabels")?.checked) return;
+    if (!meshGroup || !segData || !segData.part_table) return;
+    
+    const parts = segData.part_table.parts || [];
+    
+    parts.forEach((part) => {
+        const partId = part.part_id;
+        const partName = part.name || part.provisional_name || `part_${partId}`;
+        const centroid = part.centroid || [0, 0, 0];
+        
+        // Get color for this part (matches mesh coloring)
+        const partColor = getPartColor(partId);
+        
+        // Create position vector from centroid
+        const pos = new THREE.Vector3(centroid[0], centroid[1], centroid[2]);
+        
+        // Calculate bounding box size for label positioning
+        const bboxMin = part.bbox_min || [0, 0, 0];
+        const bboxMax = part.bbox_max || [0, 0, 0];
+        const size = new THREE.Vector3(
+            bboxMax[0] - bboxMin[0],
+            bboxMax[1] - bboxMin[1],
+            bboxMax[2] - bboxMin[2]
+        );
+        const diag = size.length();
+        const lift = Math.max(0.05 * diag, 0.1); // Lift label above part
+        
+        // Position label above centroid
+        const labelPos = pos.clone().add(new THREE.Vector3(0, lift, 0));
+        
+        // Create text sprite with matching color
+        const spr = makeTextSprite(partName, {
+            fontSize: 48,
+            worldScale: 0.08,
+            pad: 12,
+            color: colorToHex(partColor), // Use part color for text
+        });
+        spr.position.copy(labelPos);
+        spr.renderOrder = 1000;
+        
+        // Add to scene
+        if (pivot) {
+            pivot.add(spr);
+            partLabelSprites.set(partId, spr);
+        }
+    });
+}
+
 // Apply distinct colors to each part in the mesh based on segmentation
 function applyPartColorsToMesh(meshGroup, segData) {
     if (!meshGroup || !segData || !segData.part_table) return;
@@ -1936,14 +2016,26 @@ if (ingestMesh) {
                 partLabelingSection.style.display = 'block';
                 if (confirmParamsEmpty) confirmParamsEmpty.style.display = 'none';
                 
-                // Display part IDs for visualization
+                // Display part names and IDs for visualization
                 if (partIdsDisplay) {
                     const parts = result.part_table.parts || [];
-                    const partIds = parts.map(p => `Part ${p.part_id}`).join(', ');
-                    partIdsDisplay.textContent = partIds || 'No parts found';
+                    const partInfo = parts.map(p => {
+                        const name = p.name || p.provisional_name || `part_${p.part_id}`;
+                        return `${name} (ID: ${p.part_id})`;
+                    }).join(', ');
+                    partIdsDisplay.textContent = partInfo || 'No parts found';
                 }
                 
-                // Build labeling UI
+                // Place labels on mesh parts if mesh is loaded and labels are enabled
+                if (group && document.getElementById("toggleLabels")?.checked) {
+                    setTimeout(() => {
+                        if (segmentationData && segmentationData.part_table) {
+                            placeMeshPartLabels(group, segmentationData);
+                        }
+                    }, 100);
+                }
+                
+                // Build labeling UI with colors matching mesh parts
                 let html = '';
                 const parts = result.part_table.parts || [];
                 parts.forEach(part => {
@@ -1952,9 +2044,17 @@ if (ingestMesh) {
                     const shapeHint = part.shape_hint || 'unknown';
                     const touchesGround = part.touches_ground ? ' (touches ground)' : '';
                     
-                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #f3ebf7; border-radius: 4px; border-left: 3px solid #5f476e;">`;
-                    html += `<div style="font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">`;
-                    html += `<span style="background: #5f476e; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">ID: ${partId}</span>`;
+                    // Get color for this part (matches mesh coloring)
+                    const partColor = getPartColor(partId);
+                    const colorHex = colorToHex(partColor);
+                    // Calculate a readable text color (white or black) based on brightness
+                    const brightness = (partColor.r * 299 + partColor.g * 587 + partColor.b * 114) / 1000;
+                    const textColor = brightness > 0.5 ? '#000000' : '#ffffff';
+                    
+                    html += `<div style="margin-bottom: 8px; padding: 8px; background: #f3ebf7; border-radius: 4px; border-left: 3px solid ${colorHex};">`;
+                    html += `<div style="font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">`;
+                    html += `<span style="background: ${colorHex}; color: ${textColor}; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">ID: ${partId}</span>`;
+                    html += `<span style="color: #1e293b; font-size: 13px; font-weight: 600;">${currentName}</span>`;
                     html += `<span style="color: #64748b; font-size: 11px;">${shapeHint}${touchesGround}</span>`;
                     html += `</div>`;
                     html += `<input type="text" id="part_label_${partId}" value="${currentName}" placeholder="Enter semantic name (e.g., backrest)" style="width: 100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; margin-top: 4px;" />`;

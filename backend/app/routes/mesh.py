@@ -137,10 +137,14 @@ def ingest_mesh_segment():
                 "bbox": bbox_data,
             })
         
-        # Print part details
+        # Print part details with names prominently displayed
         print(f"[ingest_mesh_segment] Part breakdown:")
         for part in segmentation_summary["parts"]:
-            print(f"[ingest_mesh_segment]   • Part {part['id']} ({part['name']}): {part['point_count']} points ({part['percentage']:.1f}%)")
+            name = part['name']
+            part_id = part['id']
+            points = part['point_count']
+            pct = part['percentage']
+            print(f"[ingest_mesh_segment]   • {name} (ID: {part_id}): {points} points ({pct:.1f}%)")
         
         # Build PartTable for user labeling
         mesh = trimesh.load(mesh_path)
