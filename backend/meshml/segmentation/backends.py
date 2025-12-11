@@ -155,7 +155,7 @@ class Hunyuan3DPartSegmentationBackend:
 
         Args:
             model_ckpt_dir: Directory containing P3-SAM checkpoint
-                           (default: checks backend/checkpoints/partseg, then downloads from HuggingFace)
+                           (default: checks backend/checkpoints/Hunyuan3D-Part/p3sam/)
             device: 'cuda' or 'cpu' (auto-detected if None)
         """
         import torch
@@ -196,7 +196,7 @@ class Hunyuan3DPartSegmentationBackend:
         self._processor = None
 
     def _load_model(self):
-        """Lazy load the P3-SAM model."""
+        """Lazy load the P3-SAM model from local files only."""
         if self._model is not None:
             return
 
@@ -204,348 +204,124 @@ class Hunyuan3DPartSegmentationBackend:
             import torch
             import trimesh
             import numpy as np
+            import sys
 
-            # Store torch for use in model loading
-            self._torch = torch
+            print("[Hunyuan3D] Loading P3-SAM model from local files only...")
 
-            print("[Hunyuan3D] Attempting to load Hunyuan3D-Part P3-SAM model...")
+            # Find P3-SAM code directory
+            p3sam_code_path = (
+                Path(__file__).parent.parent.parent
+                / "checkpoints"
+                / "Hunyuan3D-Part-code"
+                / "P3-SAM"
+            )
 
-            # Try multiple approaches to load the model
-            model_loaded = False
-
-            # Approach 0: Try loading from local checkpoint directory first
-            if self.model_ckpt_dir and Path(self.model_ckpt_dir).exists():
-                try:
-                    from transformers import AutoModel, AutoProcessor
-
-                    print(
-                        f"[Hunyuan3D] Trying to load from local checkpoint: {self.model_ckpt_dir}"
-                    )
-                    ckpt_path = Path(self.model_ckpt_dir)
-
-                    # If model_ckpt_dir points to a subdirectory (like "model"), check parent for config
-                    parent_path = ckpt_path.parent
-                    if (parent_path / "config.json").exists():
-                        # Use parent directory as the model root (HuggingFace format)
-                        model_root = parent_path
-                        print(
-                            f"[Hunyuan3D] Using parent directory as model root: {model_root}"
-                        )
-                    else:
-                        model_root = ckpt_path
-
-                    # Check for model files in the checkpoint directory
-                    model_files = (
-                        list(ckpt_path.glob("*.safetensors"))
-                        + list(ckpt_path.glob("*.bin"))
-                        + list(ckpt_path.glob("*.pth"))
-                    )
-                    # Also check parent directory if different
-                    if model_root != ckpt_path:
-                        model_files.extend(
-                            list(model_root.glob("*.safetensors"))
-                            + list(model_root.glob("*.bin"))
-                            + list(model_root.glob("*.pth"))
-                        )
-                        # Also check model subdirectory
-                        model_subdir = model_root / "model"
-                        if model_subdir.exists():
-                            model_files.extend(
-                                list(model_subdir.glob("*.safetensors"))
-                                + list(model_subdir.glob("*.bin"))
-                                + list(model_subdir.glob("*.pth"))
-                            )
-                    config_file = model_root / "config.json"
-
-                    if model_files:
-                        print(
-                            f"[Hunyuan3D] Found model file(s): {[f.name for f in model_files]}"
-                        )
-
-                        # If we have a config.json, try loading as HuggingFace model
-                        if config_file.exists():
-                            try:
-                                # Use model_root (parent) if it has config.json, otherwise use ckpt_path
-                                model_path = (
-                                    str(model_root)
-                                    if model_root != ckpt_path
-                                    else str(ckpt_path)
-                                )
-                                print(f"[Hunyuan3D] Loading model from: {model_path}")
-                                print(f"[Hunyuan3D] Config file: {config_file}")
-                                model = AutoModel.from_pretrained(
-                                    model_path,
-                                    trust_remote_code=True,
-                                    local_files_only=True,
-                                ).to(self.device)
-                                model.eval()
-
-                                # Try to load processor if available
-                                try:
-                                    processor = AutoProcessor.from_pretrained(
-                                        model_path,
-                                        trust_remote_code=True,
-                                        local_files_only=True,
-                                    )
-                                    self._processor = processor
-                                except:
-                                    self._processor = None
-
-                                self._model = model
-                                model_loaded = True
-                                print(
-                                    f"[Hunyuan3D] ✓ Loaded model from local checkpoint: {ckpt_path}"
-                                )
-                            except Exception as e:
-                                print(
-                                    f"[Hunyuan3D] Failed to load from local checkpoint as HuggingFace model: {e}"
-                                )
-                                print(
-                                    "[Hunyuan3D] Note: config.json may be needed for proper model loading"
-                                )
-                                print("[Hunyuan3D] Trying other approaches...")
-                        else:
-                            print(
-                                f"[Hunyuan3D] Warning: No config.json found in {ckpt_path}"
-                            )
-                            print(
-                                "[Hunyuan3D] Attempting to download config.json from HuggingFace..."
-                            )
-                            try:
-                                from huggingface_hub import hf_hub_download
-
-                                # Download config.json from HuggingFace
-                                config_path = hf_hub_download(
-                                    repo_id="tencent/Hunyuan3D-Part",
-                                    filename="config.json",
-                                    local_dir=str(model_root),
-                                    local_dir_use_symlinks=False,
-                                )
-                                print(
-                                    f"[Hunyuan3D] ✓ Downloaded config.json to {config_path}"
-                                )
-
-                                # Now try loading again
-                                model = AutoModel.from_pretrained(
-                                    str(model_root),
-                                    trust_remote_code=True,
-                                    local_files_only=True,
-                                ).to(self.device)
-                                model.eval()
-
-                                try:
-                                    processor = AutoProcessor.from_pretrained(
-                                        str(model_root),
-                                        trust_remote_code=True,
-                                        local_files_only=True,
-                                    )
-                                    self._processor = processor
-                                except:
-                                    self._processor = None
-
-                                self._model = model
-                                model_loaded = True
-                                print(
-                                    f"[Hunyuan3D] ✓ Loaded model from local checkpoint with downloaded config: {ckpt_path}"
-                                )
-                            except Exception as e:
-                                print(
-                                    f"[Hunyuan3D] Failed to download config or load model: {e}"
-                                )
-                                print(
-                                    "[Hunyuan3D] Trying HuggingFace full download approach..."
-                                )
-                except Exception as e:
-                    print(f"[Hunyuan3D] Error checking local checkpoint: {e}")
-
-            # Approach 1: Try loading from HuggingFace using transformers
-            if not model_loaded:
-                try:
-                    from transformers import AutoModel, AutoProcessor
-
-                    print("[Hunyuan3D] Trying HuggingFace transformers approach...")
-
-                    # Try to find a Hunyuan model on HuggingFace
-                    model_name = os.environ.get(
-                        "HUNYUAN3D_MODEL_NAME", "tencent/Hunyuan3D-Part"
-                    )
-
-                    try:
-                        # Try to load model with trust_remote_code (required for custom model classes)
-                        print(f"[Hunyuan3D] Loading from HuggingFace: {model_name}")
-                        model = AutoModel.from_pretrained(
-                            model_name,
-                            trust_remote_code=True,
-                            torch_dtype=(
-                                self._torch.float16
-                                if self.device == "cuda"
-                                else self._torch.float32
-                            ),
-                        ).to(self.device)
-                        model.eval()
-
-                        # Try to load processor if available
-                        try:
-                            processor = AutoProcessor.from_pretrained(
-                                model_name, trust_remote_code=True
-                            )
-                            self._processor = processor
-                        except Exception as proc_e:
-                            print(f"[Hunyuan3D] Processor not available: {proc_e}")
-                            self._processor = None
-
-                        self._model = model
-                        model_loaded = True
-                        print(
-                            f"[Hunyuan3D] ✓ Loaded model from HuggingFace: {model_name}"
-                        )
-                    except Exception as e:
-                        print(f"[Hunyuan3D] Transformers approach failed: {e}")
-                        import traceback
-
-                        traceback.print_exc()
-
-                except ImportError as e:
-                    print(f"[Hunyuan3D] transformers not available: {e}")
-
-            # Approach 2: Try using P3-SAM from cloned repository
-            if not model_loaded:
-                try:
-                    # Check for cloned P3-SAM code
-                    p3sam_code_path = (
-                        Path(__file__).parent.parent.parent
-                        / "checkpoints"
-                        / "Hunyuan3D-Part-code"
-                        / "P3-SAM"
-                    )
-
-                    if p3sam_code_path.exists():
-                        import sys
-
-                        # Add P3-SAM to path
-                        if str(p3sam_code_path) not in sys.path:
-                            sys.path.insert(0, str(p3sam_code_path))
-
-                        print("[Hunyuan3D] Found P3-SAM code, attempting to import...")
-                        # Try importing P3-SAM
-                        try:
-                            from p3sam import P3SAM
-
-                            # Get checkpoint path
-                            p3sam_ckpt = (
-                                Path(__file__).parent.parent.parent
-                                / "checkpoints"
-                                / "Hunyuan3D-Part"
-                                / "p3sam"
-                                / "p3sam.safetensors"
-                            )
-
-                            if not p3sam_ckpt.exists():
-                                # Try alternative location
-                                p3sam_ckpt = model_root / "p3sam" / "p3sam.safetensors"
-
-                            if p3sam_ckpt.exists():
-                                print(
-                                    f"[Hunyuan3D] Initializing P3-SAM with checkpoint: {p3sam_ckpt}"
-                                )
-                                self._model = P3SAM(
-                                    model_path=str(p3sam_ckpt), device=self.device
-                                )
-                                model_loaded = True
-                                print("[Hunyuan3D] ✓ Loaded P3-SAM model from code")
-                            else:
-                                print(
-                                    f"[Hunyuan3D] P3-SAM checkpoint not found at: {p3sam_ckpt}"
-                                )
-                        except ImportError as e:
-                            print(f"[Hunyuan3D] Failed to import P3-SAM: {e}")
-                        except Exception as e:
-                            print(f"[Hunyuan3D] Failed to initialize P3-SAM: {e}")
-                    else:
-                        print(
-                            f"[Hunyuan3D] P3-SAM code not found at: {p3sam_code_path}"
-                        )
-                except Exception as e:
-                    print(f"[Hunyuan3D] Error checking for P3-SAM code: {e}")
-
-            # Approach 3: Try downloading from HuggingFace Hub directly
-            if not model_loaded:
-                try:
-                    from huggingface_hub import snapshot_download
-                    from transformers import AutoModel, AutoProcessor
-
-                    print("[Hunyuan3D] Trying HuggingFace Hub download...")
-
-                    if self.model_ckpt_dir is None:
-                        cache_dir = snapshot_download(
-                            repo_id="tencent/Hunyuan3D-Part",
-                            repo_type="model",
-                            cache_dir=None,
-                        )
-                        self.model_ckpt_dir = Path(cache_dir)
-                    else:
-                        self.model_ckpt_dir = Path(self.model_ckpt_dir)
-
-                    print(f"[Hunyuan3D] Model downloaded to: {self.model_ckpt_dir}")
-                    # Try loading from downloaded checkpoint
-                    model = AutoModel.from_pretrained(
-                        str(self.model_ckpt_dir),
-                        trust_remote_code=True,
-                        local_files_only=True,
-                        torch_dtype=(
-                            self._torch.float16
-                            if self.device == "cuda"
-                            else self._torch.float32
-                        ),
-                    ).to(self.device)
-                    model.eval()
-                    try:
-                        processor = AutoProcessor.from_pretrained(
-                            str(self.model_ckpt_dir),
-                            trust_remote_code=True,
-                            local_files_only=True,
-                        )
-                        self._processor = processor
-                    except Exception as proc_e:
-                        print(f"[Hunyuan3D] Processor not available: {proc_e}")
-                        self._processor = None
-                    self._model = model
-                    model_loaded = True
-                    print(
-                        f"[Hunyuan3D] ✓ Loaded model from HuggingFace Hub: {self.model_ckpt_dir}"
-                    )
-
-                except Exception as e:
-                    print(f"[Hunyuan3D] HuggingFace Hub download/load failed: {e}")
-                    import traceback
-
-                    traceback.print_exc()
-
-            if not model_loaded:
+            if not p3sam_code_path.exists():
                 raise RuntimeError(
-                    "CRITICAL: Could not load Hunyuan3D-Part P3-SAM model. "
-                    "The segmentation backend requires a working Hunyuan3D-Part model.\n\n"
-                    "The model failed to load from all attempted sources:\n"
-                    "  1. Local checkpoint directory (checkpoints/Hunyuan3D-Part/)\n"
-                    "  2. HuggingFace transformers AutoModel (tencent/Hunyuan3D-Part)\n"
-                    "  3. HuggingFace Hub download\n"
-                    "  4. P3-SAM code from cloned repository\n\n"
-                    "To fix this:\n"
-                    "  1. Ensure transformers and huggingface_hub are installed:\n"
-                    "     pip install transformers huggingface_hub\n"
-                    "  2. Ensure you have network access to download from HuggingFace\n"
-                    "  3. The model may require custom code - check the Hunyuan3D-Part repository:\n"
-                    "     https://github.com/Tencent-Hunyuan/Hunyuan3D-Part\n"
-                    "  4. Alternatively, switch to PointNet backend by setting:\n"
-                    "     export SEGMENTATION_BACKEND=pointnet"
+                    f"P3-SAM code not found at: {p3sam_code_path}\n"
+                    "Please ensure the Hunyuan3D-Part repository is cloned:\n"
+                    "  cd backend/checkpoints && git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-Part.git Hunyuan3D-Part-code"
                 )
+
+            # Add paths for imports
+            if str(p3sam_code_path) not in sys.path:
+                sys.path.insert(0, str(p3sam_code_path))
+
+            # Add XPart/partgen to path (needed for sonata import)
+            xpart_path = p3sam_code_path.parent / "XPart" / "partgen"
+            if xpart_path.exists() and str(xpart_path.parent) not in sys.path:
+                sys.path.insert(0, str(xpart_path.parent))
+
+            # Add demo directory to path
+            demo_path = p3sam_code_path / "demo"
+            if demo_path.exists() and str(demo_path) not in sys.path:
+                sys.path.insert(0, str(demo_path))
+
+            print(f"[Hunyuan3D] Using P3-SAM code from: {p3sam_code_path}")
+
+            # Import P3-SAM AutoMask class
+            try:
+                from auto_mask_no_postprocess import AutoMask
+
+                print("[Hunyuan3D] ✓ Imported AutoMask from local code")
+            except ImportError as e:
+                raise RuntimeError(
+                    f"Failed to import P3-SAM AutoMask: {e}\n\n"
+                    "Please ensure:\n"
+                    "  1. P3-SAM code is cloned: checkpoints/Hunyuan3D-Part-code/P3-SAM/\n"
+                    "  2. All dependencies are installed:\n"
+                    "     pip install viser fpsample trimesh numba scikit-learn scipy\n"
+                    "  3. XPart/partgen directory exists for sonata import"
+                ) from e
+
+            # Find checkpoint file
+            p3sam_ckpt = (
+                Path(__file__).parent.parent.parent
+                / "checkpoints"
+                / "Hunyuan3D-Part"
+                / "p3sam"
+                / "p3sam.safetensors"
+            )
+
+            if not p3sam_ckpt.exists():
+                # Try alternative locations
+                alt_paths = [
+                    Path(__file__).parent.parent.parent
+                    / "checkpoints"
+                    / "Hunyuan3D-Part"
+                    / "p3sam"
+                    / "p3sam.safetensors",
+                    Path(__file__).parent.parent.parent
+                    / "checkpoints"
+                    / "partseg"
+                    / "p3sam.safetensors",
+                ]
+                for alt_path in alt_paths:
+                    if alt_path.exists():
+                        p3sam_ckpt = alt_path
+                        break
+                else:
+                    raise RuntimeError(
+                        f"P3-SAM checkpoint not found. Tried:\n"
+                        f"  - {p3sam_ckpt}\n"
+                        f"  - {alt_paths[1]}\n\n"
+                        "Please ensure p3sam.safetensors is present in checkpoints/Hunyuan3D-Part/p3sam/\n"
+                        "You can download it from: https://huggingface.co/tencent/Hunyuan3D-Part"
+                    )
+
+            print(f"[Hunyuan3D] Loading checkpoint from: {p3sam_ckpt}")
+
+            # Initialize and load model
+            try:
+                # Use AutoMask wrapper (handles model initialization)
+                self._automask = AutoMask(
+                    ckpt_path=str(p3sam_ckpt),
+                    point_num=100000,
+                    prompt_num=400,
+                    threshold=0.95,
+                    post_process=False,  # Use no post-process version for speed
+                )
+                self._model = self._automask  # Store AutoMask as the model
+                print("[Hunyuan3D] ✓ Loaded P3-SAM model from local checkpoint")
+            except Exception as e:
+                import traceback
+
+                traceback.print_exc()
+                raise RuntimeError(
+                    f"Failed to initialize P3-SAM model: {e}\n\n"
+                    "Please ensure:\n"
+                    "  1. Checkpoint file exists and is valid: checkpoints/Hunyuan3D-Part/p3sam/p3sam.safetensors\n"
+                    "  2. All dependencies are installed (see P3-SAM/README.md)\n"
+                    "  3. CUDA is available if using GPU\n"
+                    "  4. Sonata model can be loaded (may require network for first-time download)"
+                ) from e
 
         except ImportError as e:
             raise ImportError(
                 f"Failed to import required dependencies for Hunyuan3D-Part: {e}\n\n"
                 "Install required packages with:\n"
-                "  pip install transformers huggingface_hub torch trimesh\n\n"
-                "The Hunyuan3D-Part segmentation backend cannot work without these dependencies."
+                "  pip install torch trimesh numpy scipy scikit-learn fpsample numba viser\n\n"
+                "The Hunyuan3D-Part segmentation backend requires these dependencies."
             ) from e
         except RuntimeError:
             # Re-raise RuntimeErrors (already formatted)
@@ -553,12 +329,11 @@ class Hunyuan3DPartSegmentationBackend:
         except Exception as e:
             raise RuntimeError(
                 f"CRITICAL: Failed to load Hunyuan3D-Part P3-SAM model: {e}\n\n"
-                "The segmentation backend requires a working Hunyuan3D-Part model. "
-                "All fallback methods have been removed - the model MUST load successfully.\n\n"
-                "Please check:\n"
-                "  1. Model files are present in checkpoints/Hunyuan3D-Part/\n"
-                "  2. Network access to HuggingFace (if downloading)\n"
-                "  3. transformers library is properly installed\n"
+                "The segmentation backend requires a working Hunyuan3D-Part model.\n\n"
+                "Please ensure:\n"
+                "  1. P3-SAM code is cloned: checkpoints/Hunyuan3D-Part-code/P3-SAM/\n"
+                "  2. Checkpoint file exists: checkpoints/Hunyuan3D-Part/p3sam/p3sam.safetensors\n"
+                "  3. All dependencies are installed\n"
                 "  4. GPU/CUDA is available if required\n\n"
                 "If you cannot get Hunyuan3D-Part working, switch to PointNet backend:\n"
                 "  export SEGMENTATION_BACKEND=pointnet"
@@ -604,103 +379,115 @@ class Hunyuan3DPartSegmentationBackend:
             )
 
         print("[Hunyuan3D] Running P3-SAM inference...")
-        with torch.no_grad():
-            # Try different model APIs
-            if hasattr(self._model, "predict"):
-                # Assume model has predict method
-                labels = self._model.predict(vertices, faces)
-            elif hasattr(self._model, "__call__"):
-                # Assume model is callable
-                if self._processor is not None:
-                    inputs = self._processor(
-                        vertices=vertices, faces=faces, return_tensors="pt"
-                    )
-                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                    outputs = self._model(**inputs)
-                    if hasattr(outputs, "labels"):
-                        labels = outputs.labels.cpu().numpy()
-                    elif isinstance(outputs, dict) and "labels" in outputs:
-                        labels = outputs["labels"].cpu().numpy()
-                    elif isinstance(outputs, torch.Tensor):
-                        labels = outputs.cpu().numpy()
-                    else:
-                        raise ValueError(
-                            f"Unknown output format from model: {type(outputs)}. "
-                            f"Expected tensor or object with 'labels' attribute."
-                        )
-                else:
-                    # Convert to tensor and call
-                    verts_tensor = (
-                        torch.from_numpy(vertices).float().unsqueeze(0).to(self.device)
-                    )
-                    faces_tensor = (
-                        torch.from_numpy(faces).long().unsqueeze(0).to(self.device)
-                    )
-                    outputs = self._model(verts_tensor, faces_tensor)
-                    if isinstance(outputs, torch.Tensor):
-                        labels = outputs.cpu().numpy().flatten()
-                    elif hasattr(outputs, "labels"):
-                        labels = outputs.labels.cpu().numpy().flatten()
-                    elif isinstance(outputs, dict) and "labels" in outputs:
-                        labels = outputs["labels"].cpu().numpy().flatten()
-                    else:
-                        raise ValueError(
-                            f"Unknown output format from model: {type(outputs)}. "
-                            f"Expected tensor or object with 'labels' attribute."
-                        )
-            else:
-                raise ValueError(
-                    "Model doesn't have predict or __call__ method. "
-                    f"Model type: {type(self._model)}"
+
+        # Use AutoMask.predict_aabb method
+        if hasattr(self._model, "predict_aabb"):
+            # AutoMask interface
+            try:
+                aabb, face_ids, processed_mesh = self._model.predict_aabb(
+                    mesh=mesh,
+                    point_num=num_points if num_points else 100000,
+                    prompt_num=400,
+                    threshold=0.95,
+                    post_process=False,
+                    save_path=None,
+                    save_mid_res=False,
+                    show_info=False,
+                    clean_mesh_flag=True,
+                    seed=42,
+                    is_parallel=True,
+                    prompt_bs=32,
                 )
 
-        # Ensure labels are integers and match vertex count
-        if labels.dtype != np.int32:
-            labels = labels.astype(np.int32)
+                # face_ids is per-face labels, need to convert to per-vertex
+                # Map face labels to vertex labels
+                vertex_labels = np.full(len(vertices), -1, dtype=np.int32)
+                for face_idx, face in enumerate(mesh.faces):
+                    face_label = face_ids[face_idx]
+                    if face_label >= 0:  # Valid label
+                        for v_idx in face:
+                            if vertex_labels[v_idx] == -1:
+                                vertex_labels[v_idx] = face_label
+                            # If vertex already has a label, keep the first one
 
-        # Ensure labels match vertex count
-        if len(labels) != len(vertices):
-            if len(labels) < len(vertices):
-                # Repeat last label or use nearest neighbor
-                try:
-                    from scipy.spatial import cKDTree
+                # For vertices without labels, assign from nearest face
+                unlabeled = vertex_labels == -1
+                if np.any(unlabeled):
+                    try:
+                        from scipy.spatial import cKDTree
 
-                    tree = cKDTree(vertices[: len(labels)])
-                    _, indices = tree.query(vertices[len(labels) :], k=1)
-                    extended_labels = np.concatenate([labels, labels[indices]])
-                    labels = extended_labels[: len(vertices)]
-                except ImportError:
-                    # Fallback: repeat last label
-                    padding = np.full(
-                        len(vertices) - len(labels), labels[-1], dtype=np.int32
+                        # Get face centers
+                        face_centers = np.array(
+                            [mesh.triangles_center[i] for i in range(len(mesh.faces))]
+                        )
+                        tree = cKDTree(face_centers)
+                        _, nearest_faces = tree.query(vertices[unlabeled], k=1)
+                        vertex_labels[unlabeled] = face_ids[nearest_faces]
+                    except ImportError:
+                        # Fallback: use face labels directly for unlabeled vertices
+                        # Assign from first face that contains the vertex
+                        for v_idx in np.where(unlabeled)[0]:
+                            for face_idx, face in enumerate(mesh.faces):
+                                if v_idx in face:
+                                    vertex_labels[v_idx] = face_ids[face_idx]
+                                    break
+
+                # Ensure all labels are non-negative and contiguous
+                unique_labels = np.unique(vertex_labels)
+                if len(unique_labels) > 0 and unique_labels[0] < 0:
+                    # Remap negative labels
+                    label_map = {
+                        old: new for new, old in enumerate(unique_labels) if old >= 0
+                    }
+                    vertex_labels = np.array(
+                        [label_map.get(l, 0) if l >= 0 else 0 for l in vertex_labels],
+                        dtype=np.int32,
                     )
-                    labels = np.concatenate([labels, padding])
-            else:
-                labels = labels[: len(vertices)]
+                    face_ids = np.array(
+                        [label_map.get(l, 0) if l >= 0 else 0 for l in face_ids],
+                        dtype=np.int32,
+                    )
 
-        # Sample points if needed (for compatibility with point-based pipelines)
-        if num_points is not None and len(labels) > num_points:
-            indices = np.random.choice(len(vertices), num_points, replace=False)
-            points = vertices[indices]
-            point_labels = labels[indices]
+                # Sample points if needed
+                if num_points is not None and len(vertex_labels) > num_points:
+                    indices = np.random.choice(len(vertices), num_points, replace=False)
+                    points = vertices[indices]
+                    point_labels = vertex_labels[indices]
+                else:
+                    points = vertices
+                    point_labels = vertex_labels
+
+                unique_labels = np.unique(vertex_labels)
+                num_parts = len(unique_labels[unique_labels >= 0])
+
+                print(f"[Hunyuan3D] ✓ P3-SAM segmentation complete: {num_parts} parts")
+
+                return PartSegmentationResult(
+                    labels=point_labels,
+                    points=points,
+                    vertex_labels=vertex_labels,
+                    vertices=vertices,
+                    num_parts=num_parts,
+                    num_points=len(points),
+                    num_vertices=len(vertices),
+                )
+            except Exception as e:
+                import traceback
+
+                traceback.print_exc()
+                raise RuntimeError(
+                    f"P3-SAM inference failed: {e}\n\n"
+                    "The model loaded but inference failed. Please check:\n"
+                    "  1. Mesh is valid and can be processed\n"
+                    "  2. GPU memory is sufficient\n"
+                    "  3. All P3-SAM dependencies are installed\n"
+                    "  4. Sonata model is available (may download on first use)"
+                ) from e
         else:
-            points = vertices
-            point_labels = labels
-
-        unique_labels = np.unique(labels)
-        num_parts = len(unique_labels)
-
-        print(f"[Hunyuan3D] ✓ P3-SAM segmentation complete: {num_parts} parts")
-
-        return PartSegmentationResult(
-            labels=point_labels,
-            points=points,
-            vertex_labels=labels,
-            vertices=vertices,
-            num_parts=num_parts,
-            num_points=len(points),
-            num_vertices=len(vertices),
-        )
+            raise RuntimeError(
+                f"Model does not have predict_aabb method. "
+                f"Model type: {type(self._model)}"
+            )
 
 
 def create_segmentation_backend(
