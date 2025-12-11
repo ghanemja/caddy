@@ -1,0 +1,56 @@
+# P3-SAM and Hunyuan3D-Part Dependencies
+# Install with: pip install -r requirements_p3sam.txt
+
+# Core ML/DL
+torch>=2.0.0
+torchvision
+torchaudio
+
+# 3D Processing
+trimesh
+fpsample
+numba
+
+# Scientific Computing
+numpy
+scipy
+scikit-learn
+scikit-image
+
+# Utilities
+tqdm
+addict
+omegaconf
+einops
+
+# Sparse Convolutions (choose based on CUDA version)
+# For CUDA 11.8:
+spconv-cu118
+# For CUDA 12.1: uncomment and comment above
+# spconv-cu121
+# For CUDA 12.4: uncomment and comment above
+# spconv-cu124
+
+# Graph Neural Networks (PyTorch Geometric)
+# Install torch-scatter compatible with your PyTorch version
+# For PyTorch 2.7.1 + CUDA 11.8:
+# pip install torch-scatter -f https://data.pyg.org/whl/torch-2.7.0+cu118.html
+# For other versions, check: https://github.com/rusty1s/pytorch_scatter
+
+# Vision Transformers
+timm
+
+# Visualization (optional but used by some components)
+viser
+
+# Build tools for CUDA extensions
+ninja
+
+# HuggingFace Hub (for model downloads)
+huggingface-hub
+safetensors
+
+# Additional dependencies that may be needed
+# (uncomment if you encounter import errors)
+# flash-attn  # Optional: requires CUDA compilation, can be disabled
+# pointnet2-pytorch  # If needed for other components

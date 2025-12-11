@@ -2,18 +2,20 @@
 Component Registry
 Manages CAD component specifications and registration
 """
-from typing import Dict, Optional, List, Any
+
+from typing import Dict, Optional, List, Any, Union
 from dataclasses import dataclass
 
 
 @dataclass
 class ComponentSpec:
     """Specification for a CAD component."""
+
     cls: type
     add_fn: Optional[callable] = None
     param_map: Optional[Dict[str, str]] = None
     proxy_fn: Optional[callable] = None
-    
+
     def __post_init__(self):
         if self.param_map is None:
             self.param_map = {}
@@ -38,13 +40,14 @@ class ModelAdapter:
     Adapter for adding components to the model.
     Queues add operations to PENDING_ADDS for later processing.
     """
+
     def __init__(self, model_cls):
         self.model_cls = model_cls
 
-    def add(self, kind: str, pending_adds: List[dict], **params):
+    def add(self, kind: str, pending_adds: List[Dict[str, Any]], **params):
         """
         Queue a component addition.
-        
+
         Args:
             kind: Component type to add
             pending_adds: List to append the add operation to
@@ -64,7 +67,7 @@ def emit_missing_proxies(scene):
 def proxy_wheels(scene, current_params: dict, cq_to_trimesh_fn, truthy_fn):
     """
     Detailed wheel proxy with rim/spokes/tread, named nodes.
-    
+
     Args:
         scene: trimesh.Scene to add wheels to
         current_params: Dictionary of current parameter values
@@ -73,7 +76,7 @@ def proxy_wheels(scene, current_params: dict, cq_to_trimesh_fn, truthy_fn):
     """
     import cadquery as cq
     import math
-    
+
     try:
         n_side = int((current_params.get("wheels_per_side") or 0))
         if n_side <= 0 or truthy_fn(current_params.get("hide_wheels")):
@@ -159,10 +162,18 @@ def proxy_wheels(scene, current_params: dict, cq_to_trimesh_fn, truthy_fn):
         add_one(right_x, y, z0, f"R{i}")
 
 
-def apply_params_to_rover(rv, params: dict, current_params: dict, this_wheel_class, rover_class, pan_tilt_class, clean_num_fn):
+def apply_params_to_rover(
+    rv,
+    params: dict,
+    current_params: dict,
+    this_wheel_class,
+    rover_class,
+    pan_tilt_class,
+    clean_num_fn,
+):
     """
     Apply parameters to a rover instance.
-    
+
     Args:
         rv: Rover instance
         params: Parameters to apply (dict)
@@ -214,4 +225,3 @@ def apply_params_to_rover(rv, params: dict, current_params: dict, this_wheel_cla
                 setattr(pan_tilt_class, key, val)
             except Exception:
                 pass
-

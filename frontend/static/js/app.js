@@ -67,6 +67,42 @@ async function snapshotCanvasToBlob() {
         canvas.toBlob((b) => res(b), "image/png", 0.9)
     );
 }
+
+// Compress image to reduce file size
+async function compressImage(blob, quality = 0.7, maxWidth = 1920) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        const url = URL.createObjectURL(blob);
+        img.onload = () => {
+            URL.revokeObjectURL(url);
+            
+            // Calculate new dimensions
+            let width = img.width;
+            let height = img.height;
+            if (width > maxWidth) {
+                height = (height * maxWidth) / width;
+                width = maxWidth;
+            }
+            
+            // Create canvas and draw resized image
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            // Convert to blob with compression
+            canvas.toBlob((compressedBlob) => {
+                resolve(compressedBlob);
+            }, 'image/jpeg', quality);
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            resolve(null); // Return null if compression fails
+        };
+        img.src = url;
+    });
+}
 if (suggestBtn) {
     suggestBtn.onclick = async () => {
     try {
@@ -325,7 +361,8 @@ const viewFront = document.getElementById("viewFront"),
     resetCam = document.getElementById("resetCam");
 const lockTarget = document.getElementById("lockTarget"),
     gridToggle = document.getElementById("gridToggle"),
-    axesToggle = document.getElementById("axesToggle");
+    axesToggle = document.getElementById("axesToggle"),
+    pointCloudToggle = document.getElementById("pointCloudToggle");
 const rotLeft = document.getElementById("rotLeft"),
     rotRight = document.getElementById("rotRight");
 const meshRotX = document.getElementById("meshRotX"),
@@ -379,6 +416,10 @@ let hovered = null,
     selectedClass = null;
 let hoveredPartId = null; // Currently hovered part ID
 let segmentationData = null; // Store segmentation data for part highlighting
+let pointCloudObject = null; // Store point cloud object for toggling
+let partIdMapping = new Map(); // Maps original part_id -> sequential ID (1, 2, 3, ...)
+let reversePartIdMapping = new Map(); // Maps sequential ID -> original part_id
+let currentlyCheckedPartId = null; // Currently checked part ID for highlighting
 const origMats = new Map();
 
 // ---- Dynamic column sizing (fit content, within viewport limits)
@@ -654,14 +695,17 @@ function syncSidebar() {
     // If we have segmentation data, show parts from segmentation instead of class registry
     if (segmentationData && segmentationData.part_table && segmentationData.part_table.parts) {
         const parts = segmentationData.part_table.parts || [];
-        parts.forEach(part => {
-            const partId = part.part_id;
-            const partName = part.provisional_name || part.name || `part_${partId}`;
-            const partColor = getPartColor(partId);
+        // Sort by original part_id to maintain consistent order
+        const sortedParts = [...parts].sort((a, b) => a.part_id - b.part_id);
+        sortedParts.forEach(part => {
+            const originalPartId = part.part_id;
+            const sequentialId = partIdMapping.get(originalPartId) || originalPartId;
+            const partName = part.provisional_name || part.name || `Unique part ${sequentialId}`;
+            const partColor = getPartColor(originalPartId); // Use original ID for color consistency
             
             const li = document.createElement("li");
             li.dataset.key = partName;
-            li.dataset.partId = partId;
+            li.dataset.partId = originalPartId; // Store original ID for lookups
             const sw = document.createElement("span");
             sw.className = "swatch";
             sw.style.backgroundColor = colorToHex(partColor);
@@ -669,7 +713,7 @@ function syncSidebar() {
             txt.textContent = partName;
             const cnt = document.createElement("span");
             cnt.className = "count";
-            cnt.textContent = partId;
+            cnt.textContent = sequentialId; // Display sequential ID
             li.appendChild(sw);
             li.appendChild(txt);
             li.appendChild(cnt);
@@ -711,8 +755,12 @@ function syncSidebar() {
         chips.innerHTML = "";
         if (segmentationData && segmentationData.part_table && segmentationData.part_table.parts) {
             const parts = segmentationData.part_table.parts || [];
-            parts.forEach(part => {
-                const partName = part.provisional_name || part.name || `part_${part.part_id}`;
+            // Sort by original part_id to maintain consistent order
+            const sortedParts = [...parts].sort((a, b) => a.part_id - b.part_id);
+            sortedParts.forEach(part => {
+                const originalPartId = part.part_id;
+                const sequentialId = partIdMapping.get(originalPartId) || originalPartId;
+                const partName = part.provisional_name || part.name || `Unique part ${sequentialId}`;
                 const c = document.createElement("span");
                 c.className = "chip";
                 c.textContent = partName;
@@ -862,7 +910,8 @@ function updateComponentsViewer(result) {
         });
         
         if (part) {
-            const partLabel = part.name || part.provisional_name || `part_${part.part_id}`;
+            const sequentialId = partIdMapping.get(part.part_id) || part.part_id;
+            const partLabel = part.name || part.provisional_name || `Unique part ${sequentialId}`;
             const params = partParamsMap[partLabel] || [];
             
             // Update count to show parameter count
@@ -874,7 +923,7 @@ function updateComponentsViewer(result) {
                     cnt.style.color = '#1e40af';
                     cnt.title = `Parameters: ${params.map(p => p.semantic_name || p.proposed_name || p.name).join(', ')}`;
                 } else {
-                    cnt.textContent = partId;
+                    cnt.textContent = sequentialId;
                     cnt.style.background = '#e2e8f0';
                     cnt.style.color = '#475569';
                     cnt.title = '';
@@ -1120,6 +1169,28 @@ async function loadMeshFile(file, filename) {
                         // Only build class registry for non-segmented meshes
                         buildClassRegistry(group);
                         colorizeByClass();
+                    }
+                    
+                    // Clear any existing point cloud when loading new mesh
+                    if (pointCloudObject) {
+                        pivot.remove(pointCloudObject);
+                        pointCloudObject.geometry.dispose();
+                        pointCloudObject.material.dispose();
+                        pointCloudObject = null;
+                    }
+                    // Reset point cloud toggle
+                    if (pointCloudToggle) {
+                        pointCloudToggle.checked = false;
+                    }
+                    
+                    // Clear any part highlighting
+                    currentlyCheckedPartId = null;
+                    currentlyHighlightedPartId = null;
+                    if (originalVertexColors) {
+                        originalVertexColors = null;
+                    }
+                    if (originalPointCloudColors) {
+                        originalPointCloudColors = null;
                     }
                     
                     placeLabels();
@@ -1556,6 +1627,10 @@ if (meshRotX && meshRotXVal) {
         if (group) {
             group.rotation.x = (angle * Math.PI) / 180;
             group.userData.rotationX = angle;
+            // Update point cloud rotation to match mesh
+            if (pointCloudObject) {
+                pointCloudObject.rotation.copy(group.rotation);
+            }
             // Reapply colors if segmentation data exists (to account for rotation)
             if (segmentationData && segmentationData.part_table) {
                 const centerOffset = group.userData.centerOffset || null;
@@ -1572,6 +1647,10 @@ if (meshRotY && meshRotYVal) {
         if (group) {
             group.rotation.y = (angle * Math.PI) / 180;
             group.userData.rotationY = angle;
+            // Update point cloud rotation to match mesh
+            if (pointCloudObject) {
+                pointCloudObject.rotation.copy(group.rotation);
+            }
             // Reapply colors if segmentation data exists (to account for rotation)
             if (segmentationData && segmentationData.part_table) {
                 const centerOffset = group.userData.centerOffset || null;
@@ -1588,6 +1667,10 @@ if (meshRotZ && meshRotZVal) {
         if (group) {
             group.rotation.z = (angle * Math.PI) / 180;
             group.userData.rotationZ = angle;
+            // Update point cloud rotation to match mesh
+            if (pointCloudObject) {
+                pointCloudObject.rotation.copy(group.rotation);
+            }
             // Reapply colors if segmentation data exists (to account for rotation)
             if (segmentationData && segmentationData.part_table) {
                 const centerOffset = group.userData.centerOffset || null;
@@ -1606,6 +1689,10 @@ if (resetMeshRot) {
             group.userData.rotationX = -90;
             group.userData.rotationY = 0;
             group.userData.rotationZ = 0;
+            // Update point cloud rotation to match mesh
+            if (pointCloudObject) {
+                pointCloudObject.rotation.copy(group.rotation);
+            }
             if (meshRotX) meshRotX.value = -90;
             if (meshRotXVal) meshRotXVal.textContent = "-90°";
             if (meshRotY) meshRotY.value = 0;
@@ -1628,6 +1715,10 @@ if (meshTransX && meshTransXVal) {
         meshTransXVal.textContent = val.toFixed(1);
         if (group) {
             group.position.x = val;
+            // Update point cloud translation to match mesh
+            if (pointCloudObject) {
+                pointCloudObject.position.x = val;
+            }
         }
     };
 }
@@ -1638,6 +1729,10 @@ if (meshTransY && meshTransYVal) {
         meshTransYVal.textContent = val.toFixed(1);
         if (group) {
             group.position.y = val;
+            // Update point cloud translation to match mesh
+            if (pointCloudObject) {
+                pointCloudObject.position.y = val;
+            }
         }
     };
 }
@@ -1648,6 +1743,10 @@ if (meshTransZ && meshTransZVal) {
         meshTransZVal.textContent = val.toFixed(1);
         if (group) {
             group.position.z = val;
+            // Update point cloud translation to match mesh
+            if (pointCloudObject) {
+                pointCloudObject.position.z = val;
+            }
         }
     };
 }
@@ -1656,6 +1755,10 @@ if (resetMeshTrans) {
     resetMeshTrans.onclick = () => {
         if (group) {
             group.position.set(0, 0, 0);
+            // Update point cloud translation to match mesh
+            if (pointCloudObject) {
+                pointCloudObject.position.set(0, 0, 0);
+            }
             if (meshTransX) meshTransX.value = 0;
             if (meshTransXVal) meshTransXVal.textContent = "0.0";
             if (meshTransY) meshTransY.value = 0;
@@ -1679,6 +1782,13 @@ fitAllBtn.onclick = () => {
 gridToggle.onchange = () => (grid.visible = gridToggle.checked);
 axesToggle.onchange = () => (axes.visible = axesToggle.checked);
 toggleLabels.onchange = () => placeLabels();
+
+// Point cloud toggle
+if (pointCloudToggle) {
+    pointCloudToggle.onchange = () => {
+        togglePointCloudView(pointCloudToggle.checked);
+    };
+}
 
 // Prompt helpers
 function insertText(txt) {
@@ -1916,8 +2026,9 @@ function updateHover() {
             if (segmentationData && segmentationData.part_table) {
                 const partInfo = segmentationData.part_table.parts?.find(p => p.part_id === hoveredPartId);
                 if (partInfo) {
-                    const partName = partInfo.name || partInfo.provisional_name || `Part ${hoveredPartId}`;
-                    nameEl.textContent = `${partName} (ID: ${hoveredPartId})`;
+                    const sequentialId = partIdMapping.get(hoveredPartId) || hoveredPartId;
+                    const partName = partInfo.name || partInfo.provisional_name || `Unique part ${sequentialId}`;
+                    nameEl.textContent = `${partName} (ID: ${sequentialId})`;
                 }
             }
         } else {
@@ -1970,7 +2081,8 @@ function placeMeshPartLabels(meshGroup, segData) {
     
     parts.forEach((part) => {
         const partId = part.part_id;
-        const partName = part.name || part.provisional_name || `part_${partId}`;
+        const sequentialId = partIdMapping.get(partId) || partId;
+        const partName = part.name || part.provisional_name || `Unique part ${sequentialId}`;
         const centroid = part.centroid || [0, 0, 0];
         
         // Get color for this part (matches mesh coloring)
@@ -2207,131 +2319,236 @@ function highlightPart(partId) {
     });
 }
 
-// Store original vertex colors for highlighting
+// Store original vertex colors for highlighting (mesh)
 let originalVertexColors = null;
+// Store original point cloud colors for highlighting
+let originalPointCloudColors = null;
 let currentlyHighlightedPartId = null;
 
 // Highlight a specific part and grey out others (for labeling UI)
+// This now works on the point cloud instead of the mesh
 function highlightPartForLabeling(partId) {
-    if (!group || !segmentationData) return;
+    if (!segmentationData) {
+        console.warn("[highlightPartForLabeling] Missing segmentationData");
+        return;
+    }
     
-    // Check if vertex colors are enabled
-    const meshVertexToggle = document.getElementById('meshVertexToggle');
-    if (!meshVertexToggle || !meshVertexToggle.checked) {
-        // Enable vertex colors first
-        toggleMeshVertexView(true);
-        meshVertexToggle.checked = true;
+    // Check if point cloud exists
+    if (!pointCloudObject) {
+        console.warn("[highlightPartForLabeling] Point cloud not created yet. Please enable point cloud view first.");
+        return;
     }
     
     currentlyHighlightedPartId = partId;
     
     const parts = segmentationData.part_table?.parts || [];
     const partInfo = parts.find(p => p.part_id === partId);
-    if (!partInfo) return;
+    if (!partInfo) {
+        console.warn(`[highlightPartForLabeling] Part ${partId} not found`);
+        return;
+    }
     
     // Get the part color
     const partColor = getPartColor(partId);
     
-    // Get vertex labels
-    const vertexLabels = segmentationData.vertex_labels || [];
+    // Get point cloud geometry and labels
+    const geometry = pointCloudObject.geometry;
+    const colorAttribute = geometry.getAttribute('color');
+    const labels = segmentationData.labels || [];
     
-    // Traverse mesh and modify vertex colors
-    group.traverse((obj) => {
-        if (obj.isMesh && obj.geometry) {
-            const geometry = obj.geometry;
-            let colorAttribute = geometry.getAttribute('color');
-            
-            // If no color attribute exists, create one
-            if (!colorAttribute) {
-                // Reapply part colors first
-                const centerOffset = group.userData.centerOffset || null;
-                applyPartColorsToMesh(group, segmentationData, centerOffset);
-                colorAttribute = geometry.getAttribute('color');
-                if (!colorAttribute) return;
-            }
-            
-            // Store original colors if not already stored
-            if (!originalVertexColors) {
-                originalVertexColors = new Float32Array(colorAttribute.array);
-            }
-            
-            const colors = colorAttribute.array;
-            const vertexCount = colorAttribute.count;
-            
-            // Modify colors: highlight selected part, grey out others
-            for (let i = 0; i < vertexCount; i++) {
-                let vertexPartId = null;
-                
-                if (vertexLabels.length > i) {
-                    vertexPartId = vertexLabels[i];
-                } else {
-                    // Fallback: use spatial lookup (simplified)
-                    const positionAttribute = geometry.getAttribute('position');
-                    if (positionAttribute) {
-                        const x = positionAttribute.array[i * 3];
-                        const y = positionAttribute.array[i * 3 + 1];
-                        const z = positionAttribute.array[i * 3 + 2];
-                        
-                        // Find closest part centroid
-                        let minDist = Infinity;
-                        for (const part of parts) {
-                            const centroid = part.centroid || [0, 0, 0];
-                            const dist = Math.sqrt(
-                                Math.pow(x - centroid[0], 2) +
-                                Math.pow(y - centroid[1], 2) +
-                                Math.pow(z - centroid[2], 2)
-                            );
-                            if (dist < minDist) {
-                                minDist = dist;
-                                vertexPartId = part.part_id;
-                            }
-                        }
-                    }
-                }
-                
-                if (vertexPartId === partId) {
-                    // Highlight this part with full color
-                    colors[i * 3] = partColor.r;
-                    colors[i * 3 + 1] = partColor.g;
-                    colors[i * 3 + 2] = partColor.b;
-                } else {
-                    // Grey out other parts
-                    const grey = 0.3; // Dark grey
-                    colors[i * 3] = grey;
-                    colors[i * 3 + 1] = grey;
-                    colors[i * 3 + 2] = grey;
-                }
-            }
-            
-            colorAttribute.needsUpdate = true;
+    if (!colorAttribute) {
+        console.error("[highlightPartForLabeling] Point cloud has no color attribute");
+        return;
+    }
+    
+    // Store original colors if not already stored (make a deep copy)
+    if (!originalPointCloudColors || originalPointCloudColors.length !== colorAttribute.array.length) {
+        originalPointCloudColors = new Float32Array(colorAttribute.array);
+    }
+    
+    const colors = colorAttribute.array;
+    const pointCount = colorAttribute.count;
+    
+    // Modify colors: highlight selected part, grey out others
+    for (let i = 0; i < pointCount && i < labels.length; i++) {
+        const pointLabelId = parseInt(labels[i]) || 0;
+        
+        if (pointLabelId === partId) {
+            // Highlight this part with full color
+            colors[i * 3] = partColor.r;
+            colors[i * 3 + 1] = partColor.g;
+            colors[i * 3 + 2] = partColor.b;
+        } else {
+            // Grey out other parts
+            const grey = 0.3; // Dark grey
+            colors[i * 3] = grey;
+            colors[i * 3 + 1] = grey;
+            colors[i * 3 + 2] = grey;
         }
-    });
+    }
+    
+    colorAttribute.needsUpdate = true;
+    
+    console.log(`[highlightPartForLabeling] Highlighted part ${partId} in point cloud`);
 }
 
 // Clear part highlight and restore original colors
 function clearPartHighlightForLabeling() {
-    if (!group || !originalVertexColors) return;
+    if (!pointCloudObject || !originalPointCloudColors) return;
     
     currentlyHighlightedPartId = null;
+    currentlyCheckedPartId = null;
     
-    // Restore original colors
-    group.traverse((obj) => {
-        if (obj.isMesh && obj.geometry) {
-            const geometry = obj.geometry;
-            const colorAttribute = geometry.getAttribute('color');
-            
-            if (colorAttribute && originalVertexColors) {
-                const colors = colorAttribute.array;
-                for (let i = 0; i < Math.min(colors.length, originalVertexColors.length); i++) {
-                    colors[i] = originalVertexColors[i];
-                }
-                colorAttribute.needsUpdate = true;
+    // Uncheck all highlight checkboxes
+    if (segmentationData && segmentationData.part_table && segmentationData.part_table.parts) {
+        segmentationData.part_table.parts.forEach(part => {
+            const checkbox = document.getElementById(`part_highlight_${part.part_id}`);
+            if (checkbox) {
+                checkbox.checked = false;
             }
+        });
+    }
+    
+    // Restore original point cloud colors
+    const geometry = pointCloudObject.geometry;
+    const colorAttribute = geometry.getAttribute('color');
+    
+    if (colorAttribute && originalPointCloudColors) {
+        const colors = colorAttribute.array;
+        for (let i = 0; i < Math.min(colors.length, originalPointCloudColors.length); i++) {
+            colors[i] = originalPointCloudColors[i];
         }
-    });
+        colorAttribute.needsUpdate = true;
+    }
     
     // Clear stored original colors
-    originalVertexColors = null;
+    originalPointCloudColors = null;
+}
+
+// Create point cloud from segmentation data
+function createPointCloudFromSegmentation(segData) {
+    if (!segData || !segData.points || !segData.labels) {
+        console.warn("[createPointCloud] No points/labels in segmentation data");
+        return null;
+    }
+    
+    const points = segData.points;
+    const labels = segData.labels;
+    
+    if (points.length === 0 || labels.length === 0) {
+        console.warn("[createPointCloud] Empty points or labels array");
+        return null;
+    }
+    
+    // Generate colors for each part
+    const partColors = new Map();
+    const uniqueLabels = [...new Set(labels)];
+    uniqueLabels.forEach((labelId) => {
+        const partId = parseInt(labelId) || 0;
+        const hue = (partId * 137.508) % 360; // Same color scheme as mesh
+        const color = new THREE.Color().setHSL(hue / 360, 0.8, 0.65);
+        partColors.set(partId, color);
+    });
+    
+    // Create geometry
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(points.length * 3);
+    const colors = new Float32Array(points.length * 3);
+    
+    for (let i = 0; i < points.length; i++) {
+        const point = points[i];
+        positions[i * 3] = point[0] || 0;
+        positions[i * 3 + 1] = point[1] || 0;
+        positions[i * 3 + 2] = point[2] || 0;
+        
+        const labelId = parseInt(labels[i]) || 0;
+        const color = partColors.get(labelId) || new THREE.Color(0x888888);
+        colors[i * 3] = color.r;
+        colors[i * 3 + 1] = color.g;
+        colors[i * 3 + 2] = color.b;
+    }
+    
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    
+    // Create material with vertex colors
+    const material = new THREE.PointsMaterial({
+        size: 4.0, // Increased from 2.0 for denser appearance
+        vertexColors: true,
+        sizeAttenuation: true,
+    });
+    
+    const pointCloud = new THREE.Points(geometry, material);
+    return pointCloud;
+}
+
+// Toggle between mesh view and point cloud view
+function togglePointCloudView(showPointCloud) {
+    if (!segmentationData) {
+        console.warn("[togglePointCloudView] No segmentation data available");
+        if (pointCloudToggle) pointCloudToggle.checked = false;
+        return;
+    }
+    
+    // Check if we have points and labels data
+    if (!segmentationData.points || !segmentationData.labels) {
+        console.warn("[togglePointCloudView] Segmentation data missing points or labels");
+        if (pointCloudToggle) pointCloudToggle.checked = false;
+        return;
+    }
+    
+    if (showPointCloud) {
+        // Hide mesh
+        if (group) {
+            group.visible = false;
+        }
+        
+        // Create and show point cloud if it doesn't exist
+        if (!pointCloudObject) {
+            pointCloudObject = createPointCloudFromSegmentation(segmentationData);
+            if (pointCloudObject) {
+                // Apply same center offset as mesh (if available)
+                if (group && group.userData.centerOffset) {
+                    const centerOffset = group.userData.centerOffset;
+                    pointCloudObject.position.sub(centerOffset);
+                }
+                // Apply same rotation and translation as mesh
+                if (group) {
+                    pointCloudObject.rotation.copy(group.rotation);
+                    pointCloudObject.position.copy(group.position);
+                }
+                pivot.add(pointCloudObject);
+                
+                // Clear any existing highlighting state for new point cloud
+                originalPointCloudColors = null;
+                currentlyHighlightedPartId = null;
+                currentlyCheckedPartId = null;
+                
+                console.log("[togglePointCloudView] Point cloud created and added to scene");
+            } else {
+                console.error("[togglePointCloudView] Failed to create point cloud");
+                if (pointCloudToggle) pointCloudToggle.checked = false;
+                return;
+            }
+        } else {
+            pointCloudObject.visible = true;
+            // Update rotation and translation to match mesh
+            if (group) {
+                pointCloudObject.rotation.copy(group.rotation);
+                pointCloudObject.position.copy(group.position);
+            }
+        }
+    } else {
+        // Show mesh
+        if (group) {
+            group.visible = true;
+        }
+        
+        // Hide point cloud
+        if (pointCloudObject) {
+            pointCloudObject.visible = false;
+        }
+    }
 }
 
 // Toggle between mesh view and vertex-colored view
@@ -2689,7 +2906,7 @@ if (ingestMesh) {
             return;
         }
         if (meshIngestStatus) {
-            meshIngestStatus.textContent = 'Running segmentation... (this should take ~1-5 seconds)';
+            meshIngestStatus.textContent = 'Running segmentation... (this should take ~1-5 minutes)';
             meshIngestStatus.style.color = '#64748b';
         }
         if (meshIngestResults) meshIngestResults.style.display = 'none';
@@ -2715,6 +2932,21 @@ if (ingestMesh) {
 
             // Store segmentation data for step 2
             segmentationData = result;
+            
+            // Create sequential part ID mapping (1, 2, 3, ...)
+            if (result.part_table && result.part_table.parts) {
+                partIdMapping.clear();
+                reversePartIdMapping.clear();
+                const parts = result.part_table.parts;
+                // Sort by original part_id to ensure consistent ordering
+                const sortedParts = [...parts].sort((a, b) => a.part_id - b.part_id);
+                sortedParts.forEach((part, index) => {
+                    const sequentialId = index + 1; // 1, 2, 3, ...
+                    partIdMapping.set(part.part_id, sequentialId);
+                    reversePartIdMapping.set(sequentialId, part.part_id);
+                });
+                console.log("[mesh_ingest] Created part ID mapping:", Array.from(partIdMapping.entries()));
+            }
 
             // Load the mesh file into the 3D viewer
             if (result.mesh_path && file) {
@@ -2763,15 +2995,18 @@ if (ingestMesh) {
                 // Build labeling UI with colors matching mesh parts
                 let html = '';
                 const parts = result.part_table.parts || [];
-                parts.forEach(part => {
-                    const partId = part.part_id;
+                // Sort by original part_id to maintain consistent order
+                const sortedParts = [...parts].sort((a, b) => a.part_id - b.part_id);
+                sortedParts.forEach(part => {
+                    const originalPartId = part.part_id;
+                    const sequentialId = partIdMapping.get(originalPartId) || originalPartId;
                     // Use provisional_name (from segmentation) if name is not set by user
-                    const currentName = part.provisional_name || part.name || `part_${partId}`;
+                    const currentName = part.provisional_name || part.name || `Unique part ${sequentialId}`;
                     const shapeHint = part.shape_hint || 'unknown';
                     const touchesGround = part.touches_ground ? ' (touches ground)' : '';
                     
-                    // Get color for this part (matches mesh coloring)
-                    const partColor = getPartColor(partId);
+                    // Get color for this part (matches mesh coloring) - use original ID for color
+                    const partColor = getPartColor(originalPartId);
                     const colorHex = colorToHex(partColor);
                     // Calculate a readable text color (white or black) based on brightness
                     const brightness = (partColor.r * 299 + partColor.g * 587 + partColor.b * 114) / 1000;
@@ -2779,26 +3014,67 @@ if (ingestMesh) {
                     
                     html += `<div style="margin-bottom: 8px; padding: 8px; background: #f3ebf7; border-radius: 4px; border-left: 3px solid ${colorHex};">`;
                     html += `<div style="font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">`;
-                    html += `<span style="background: ${colorHex}; color: ${textColor}; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">ID: ${partId}</span>`;
+                    html += `<input type="checkbox" id="part_highlight_${originalPartId}" style="cursor: pointer; width: 16px; height: 16px;" title="Highlight this part and grey out others" />`;
+                    html += `<span style="background: ${colorHex}; color: ${textColor}; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">ID: ${sequentialId}</span>`;
                     html += `<span style="color: #1e293b; font-size: 13px; font-weight: 600;">${currentName}</span>`;
                     html += `<span style="color: #64748b; font-size: 11px;">${shapeHint}${touchesGround}</span>`;
                     html += `</div>`;
                     html += `<div style="font-size: 11px; color: #64748b; margin-bottom: 2px;">Preliminary name (edit to correct):</div>`;
-                    html += `<input type="text" id="part_label_${partId}" value="${currentName}" placeholder="Enter semantic name (e.g., backrest, wing, engine)" style="width: 100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; margin-top: 2px;" />`;
+                    html += `<input type="text" id="part_label_${originalPartId}" value="${currentName}" placeholder="Enter semantic name (e.g., backrest, wing, engine)" style="width: 100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; margin-top: 2px;" />`;
                     html += `</div>`;
                 });
                 partLabelingList.innerHTML = html;
                 
+                // Add event listeners for part highlighting checkboxes
+                sortedParts.forEach(part => {
+                    const originalPartId = part.part_id;
+                    const checkbox = document.getElementById(`part_highlight_${originalPartId}`);
+                    if (checkbox) {
+                        checkbox.addEventListener('change', (e) => {
+                            if (e.target.checked) {
+                                // Uncheck all other checkboxes
+                                sortedParts.forEach(otherPart => {
+                                    if (otherPart.part_id !== originalPartId) {
+                                        const otherCheckbox = document.getElementById(`part_highlight_${otherPart.part_id}`);
+                                        if (otherCheckbox) {
+                                            otherCheckbox.checked = false;
+                                        }
+                                    }
+                                });
+                                // Highlight this part
+                                currentlyCheckedPartId = originalPartId;
+                                highlightPartForLabeling(originalPartId);
+                            } else {
+                                // Clear highlight
+                                currentlyCheckedPartId = null;
+                                clearPartHighlightForLabeling();
+                            }
+                        });
+                    }
+                });
+                
                 // Add event listeners for part highlighting on input focus
-                parts.forEach(part => {
-                    const partId = part.part_id;
-                    const input = document.getElementById(`part_label_${partId}`);
+                sortedParts.forEach(part => {
+                    const originalPartId = part.part_id;
+                    const input = document.getElementById(`part_label_${originalPartId}`);
                     if (input) {
                         input.addEventListener('focus', () => {
-                            highlightPartForLabeling(partId);
+                            // Check the checkbox when input is focused
+                            const checkbox = document.getElementById(`part_highlight_${originalPartId}`);
+                            if (checkbox && !checkbox.checked) {
+                                checkbox.checked = true;
+                                checkbox.dispatchEvent(new Event('change'));
+                            } else if (!checkbox) {
+                                // If checkbox doesn't exist, just highlight
+                                highlightPartForLabeling(originalPartId);
+                            }
                         });
                         input.addEventListener('blur', () => {
-                            clearPartHighlightForLabeling();
+                            // Don't clear if checkbox is still checked
+                            const checkbox = document.getElementById(`part_highlight_${originalPartId}`);
+                            if (!checkbox || !checkbox.checked) {
+                                clearPartHighlightForLabeling();
+                            }
                         });
                     }
                 });
@@ -2884,14 +3160,77 @@ if (submitLabelsBtn) {
 
         try {
             // Call step 2 endpoint with labels
+            // Include segmentation data from step 1 to avoid re-running segmentation
+            // Also include canvas snapshot and reference image if available
+            // Calculate sizes before sending
+            const partTableSize = JSON.stringify(segmentationData.part_table).length;
+            const vertexLabelsSize = segmentationData.vertex_labels ? JSON.stringify(segmentationData.vertex_labels).length : 0;
+            const pointsSize = segmentationData.points ? JSON.stringify(segmentationData.points).length : 0;
+            const labelsSize = segmentationData.labels ? JSON.stringify(segmentationData.labels).length : 0;
+            const totalSize = partTableSize + vertexLabelsSize + pointsSize + labelsSize;
+            
+            console.log(`[Submit Labels] Data sizes:`);
+            console.log(`  part_table: ${(partTableSize / 1024 / 1024).toFixed(2)} MB`);
+            console.log(`  vertex_labels: ${(vertexLabelsSize / 1024 / 1024).toFixed(2)} MB`);
+            console.log(`  points: ${(pointsSize / 1024 / 1024).toFixed(2)} MB`);
+            console.log(`  labels: ${(labelsSize / 1024 / 1024).toFixed(2)} MB`);
+            console.log(`  Total segmentation_data: ${(totalSize / 1024 / 1024).toFixed(2)} MB`);
+            
+            // Don't send full point cloud data - it's not needed for VLM step
+            // Only send what's necessary: part_table and vertex_labels (for PartTable reconstruction)
+            const formData = new FormData();
+            formData.append('mesh_path', segmentationData.mesh_path);
+            formData.append('temp_dir', segmentationData.temp_dir);
+            formData.append('part_labels', JSON.stringify(partLabels));
+            
+            // Only send essential data - skip large point cloud arrays
+            const essentialData = {
+                part_table: segmentationData.part_table,
+                vertex_labels: segmentationData.vertex_labels,
+                // Don't send points/labels - they're huge and not needed for VLM step
+                // The backend can sample points from the mesh if needed
+            };
+            formData.append('segmentation_data', JSON.stringify(essentialData));
+            
+            const essentialSize = JSON.stringify(essentialData).length;
+            console.log(`  Essential data only: ${(essentialSize / 1024 / 1024).toFixed(2)} MB (saved ${((totalSize - essentialSize) / 1024 / 1024).toFixed(2)} MB)`);
+            
+            // Add canvas snapshot if available - compress it first to reduce size
+            try {
+                const canvasSnapshot = await snapshotCanvasToBlob();
+                if (canvasSnapshot) {
+                    // Compress the image before sending
+                    const compressedSnapshot = await compressImage(canvasSnapshot, 0.7, 1920); // 70% quality, max 1920px width
+                    if (compressedSnapshot) {
+                        formData.append('canvas_snapshot', new File([compressedSnapshot], 'canvas_snapshot.png', { type: 'image/png' }));
+                        console.log(`Canvas snapshot: ${(canvasSnapshot.size / 1024 / 1024).toFixed(2)} MB -> ${(compressedSnapshot.size / 1024 / 1024).toFixed(2)} MB`);
+                    } else {
+                        formData.append('canvas_snapshot', new File([canvasSnapshot], 'canvas_snapshot.png', { type: 'image/png' }));
+                    }
+                }
+            } catch (e) {
+                console.warn('Could not capture canvas snapshot:', e);
+            }
+            
+            // Add reference image if available (from Step 1 upload - check both 'ref' and 'imgFile' inputs)
+            const refInput = document.getElementById('ref');
+            const imgFileInput = document.getElementById('imgFile');
+            const referenceImageFile = (refInput && refInput.files && refInput.files[0]) 
+                ? refInput.files[0] 
+                : (imgFileInput && imgFileInput.files && imgFileInput.files[0]) 
+                    ? imgFileInput.files[0] 
+                    : null;
+            
+            if (referenceImageFile) {
+                formData.append('reference_image', referenceImageFile);
+                console.log(`[Submit Labels] Including reference image: ${referenceImageFile.name}`);
+            } else {
+                console.warn('[Submit Labels] No reference image found - category classification may be less accurate');
+            }
+            
             const r = await fetch('/api/mesh/ingest_mesh_label', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    mesh_path: segmentationData.mesh_path,
-                    temp_dir: segmentationData.temp_dir,
-                    part_labels: partLabels,
-                }),
+                body: formData,  // Use FormData instead of JSON to support file uploads
             });
 
             if (!r.ok) {
@@ -2918,24 +3257,82 @@ if (submitLabelsBtn) {
             
             if (confirmParamsContent && confirmParamsCategory && confirmParamsList) {
                 const category = result.category || 'Unknown';
-                confirmParamsCategory.textContent = `Category: ${category}`;
+                const categoryConfidence = result.hierarchical?.category_confidence;
+                const categoryReasoning = result.hierarchical?.category_reasoning;
+                
+                // Display category in header with confidence and reasoning
+                let categoryText = category.charAt(0).toUpperCase() + category.slice(1);
+                if (categoryConfidence !== undefined) {
+                    categoryText += ` (${(categoryConfidence * 100).toFixed(0)}% confidence)`;
+                }
+                confirmParamsCategory.innerHTML = `<div style="font-size: 16px; color: #1e40af; margin-bottom: 4px;">${categoryText}</div>`;
+                if (categoryReasoning) {
+                    confirmParamsCategory.innerHTML += `<div style="font-size: 11px; color: #64748b; font-style: italic; margin-top: 2px;">${categoryReasoning}</div>`;
+                }
                 
                 let html = '';
-                const proposedParams = result.proposed_parameters || result.final_parameters || [];
-                if (proposedParams.length > 0) {
-                    html += '<div style="margin-bottom: 12px;"><strong>Proposed Semantic Parameters:</strong></div>';
-                    proposedParams.forEach(p => {
-                        const units = p.units ? ` ${p.units}` : '';
-                        const conf = p.confidence ? ` (conf: ${(p.confidence * 100).toFixed(0)}%)` : '';
-                        const semanticName = p.semantic_name || p.name;
-                        const paramId = p.id || '?';
-                        html += `<div style="margin: 4px 0; padding: 6px; background: #f8fafc; border-radius: 4px; border-left: 3px solid #3b82f6;">`;
-                        html += `<div style="font-weight: 600;">${paramId} → <span style="color: #1e40af;">${semanticName}</span>: ${p.value.toFixed(4)}${units}${conf}</div>`;
-                        html += `<div style="color: #64748b; font-size: 11px; margin-top: 2px;">${p.description || ''}</div>`;
-                        html += `</div>`;
-                    });
+                
+                // Use hierarchical structure if available, otherwise fall back to flat list
+                if (result.hierarchical && result.hierarchical.parts) {
+                    const parts = result.hierarchical.parts;
+                    const partNames = Object.keys(parts);
+                    
+                    if (partNames.length > 0) {
+                        html += '<div style="margin-top: 16px; margin-bottom: 8px;"><strong style="font-size: 13px; color: #475569;">Proposed Semantic Parameters:</strong></div>';
+                        
+                        partNames.forEach(partName => {
+                            const part = parts[partName];
+                            const partId = part.part_id;
+                            const parameters = part.parameters || [];
+                            
+                            // Part header - use the actual part name (remove "part_X component" description)
+                            // Capitalize first letter for better display
+                            const displayName = partName.charAt(0).toUpperCase() + partName.slice(1);
+                            html += `<div style="margin-top: 20px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #c7d2fe;">`;
+                            html += `<div style="font-weight: 600; font-size: 15px; color: #4338ca;">${displayName}</div>`;
+                            html += `</div>`;
+                            
+                            // Parameters for this part (compact list)
+                            if (parameters.length > 0) {
+                                html += `<div style="margin-left: 8px; margin-bottom: 16px;">`;
+                                parameters.forEach(p => {
+                                    const units = p.units ? ` ${p.units}` : '';
+                                    const conf = p.confidence ? ` (${(p.confidence * 100).toFixed(0)}% conf)` : '';
+                                    const semanticName = p.semantic_name || p.name;
+                                    const value = p.value !== undefined ? p.value.toFixed(4) : 'N/A';
+                                    
+                                    // Compact parameter display - just name and value
+                                    html += `<div style="margin: 8px 0; padding: 6px 0; border-bottom: 1px solid #e2e8f0;">`;
+                                    html += `<div style="font-weight: 500; font-size: 12px; color: #1e40af; margin-bottom: 2px;">${semanticName}</div>`;
+                                    html += `<div style="font-size: 11px; color: #475569;">Value: ${value}${units}${conf}</div>`;
+                                    html += `</div>`;
+                                });
+                                html += `</div>`;
+                            } else {
+                                html += `<div style="margin-left: 8px; color: #94a3b8; font-size: 11px; font-style: italic; margin-bottom: 12px;">No parameters for this part.</div>`;
+                            }
+                        });
+                    } else {
+                        html += '<div style="color: #64748b;">No parts found in hierarchical structure.</div>';
+                    }
                 } else {
-                    html += '<div style="color: #64748b;">No semantic parameters proposed.</div>';
+                    // Fallback to flat list if hierarchical structure not available
+                    const proposedParams = result.proposed_parameters || result.final_parameters || [];
+                    if (proposedParams.length > 0) {
+                        html += '<div style="margin-bottom: 12px;"><strong>Proposed Semantic Parameters:</strong></div>';
+                        proposedParams.forEach(p => {
+                            const units = p.units ? ` ${p.units}` : '';
+                            const conf = p.confidence ? ` (conf: ${(p.confidence * 100).toFixed(0)}%)` : '';
+                            const semanticName = p.semantic_name || p.name;
+                            const paramId = p.id || '?';
+                            html += `<div style="margin: 4px 0; padding: 6px; background: #f8fafc; border-radius: 4px; border-left: 3px solid #3b82f6;">`;
+                            html += `<div style="font-weight: 600;">${paramId} → <span style="color: #1e40af;">${semanticName}</span>: ${p.value.toFixed(4)}${units}${conf}</div>`;
+                            html += `<div style="color: #64748b; font-size: 11px; margin-top: 2px;">${p.description || ''}</div>`;
+                            html += `</div>`;
+                        });
+                    } else {
+                        html += '<div style="color: #64748b;">No semantic parameters proposed.</div>';
+                    }
                 }
 
                 if (result.raw_parameters && result.raw_parameters.length > 0) {
@@ -2983,25 +3380,68 @@ if (submitLabelsBtn) {
             // Legacy support for meshIngestResults (if it still exists)
             if (meshCategory) {
                 const category = result.category || 'Unknown';
-                meshCategory.textContent = `Category: ${category}`;
+                const categoryConfidence = result.hierarchical?.category_confidence;
+                let categoryText = category.charAt(0).toUpperCase() + category.slice(1);
+                if (categoryConfidence !== undefined) {
+                    categoryText += ` (${(categoryConfidence * 100).toFixed(0)}% confidence)`;
+                }
+                meshCategory.textContent = categoryText;
             }
             if (meshParameters) {
                 let html = '';
-                const proposedParams = result.proposed_parameters || result.final_parameters || [];
-                if (proposedParams.length > 0) {
-                    html += '<div style="margin-bottom: 12px;"><strong>Proposed Semantic Parameters:</strong></div>';
-                    proposedParams.forEach(param => {
-                        const name = param.semantic_name || param.name || 'Unknown';
-                        const value = param.value !== undefined ? param.value : 'N/A';
-                        const units = param.units || '';
-                        const desc = param.description || '';
-                        html += `<div style="margin-bottom: 8px; padding: 8px; background: #f8fafc; border-radius: 4px;">`;
-                        html += `<strong>${name}</strong>: ${value} ${units}`;
-                        if (desc) html += `<br/><span style="font-size: 11px; color: #64748b;">${desc}</span>`;
-                        html += `</div>`;
-                    });
+                
+                // Use hierarchical structure if available
+                if (result.hierarchical && result.hierarchical.parts) {
+                    const parts = result.hierarchical.parts;
+                    const partNames = Object.keys(parts);
+                    
+                    if (partNames.length > 0) {
+                        partNames.forEach(partName => {
+                            const part = parts[partName];
+                            const parameters = part.parameters || [];
+                            
+                            // Part header - capitalize first letter
+                            const displayName = partName.charAt(0).toUpperCase() + partName.slice(1);
+                            html += `<div style="margin-top: 16px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid #c7d2fe;">`;
+                            html += `<div style="font-weight: 600; font-size: 14px; color: #4338ca;">${displayName}</div>`;
+                            html += `</div>`;
+                            
+                            // Parameters for this part (compact)
+                            if (parameters.length > 0) {
+                                parameters.forEach(p => {
+                                    const name = p.semantic_name || p.name || 'Unknown';
+                                    const value = p.value !== undefined ? p.value.toFixed(4) : 'N/A';
+                                    const units = p.units || '';
+                                    const conf = p.confidence ? ` (${(p.confidence * 100).toFixed(0)}% conf)` : '';
+                                    
+                                    html += `<div style="margin-left: 8px; margin: 6px 0; padding: 4px 0; border-bottom: 1px solid #e2e8f0;">`;
+                                    html += `<div style="font-weight: 500; font-size: 11px; color: #1e40af; margin-bottom: 2px;">${name}</div>`;
+                                    html += `<div style="font-size: 10px; color: #475569;">Value: ${value}${units}${conf}</div>`;
+                                    html += `</div>`;
+                                });
+                            }
+                        });
+                    } else {
+                        html = '<div style="color: #94a3b8; font-style: italic;">No parts found.</div>';
+                    }
                 } else {
-                    html = '<div style="color: #94a3b8; font-style: italic;">No parameters extracted.</div>';
+                    // Fallback to flat list
+                    const proposedParams = result.proposed_parameters || result.final_parameters || [];
+                    if (proposedParams.length > 0) {
+                        html += '<div style="margin-bottom: 12px;"><strong>Proposed Semantic Parameters:</strong></div>';
+                        proposedParams.forEach(param => {
+                            const name = param.semantic_name || param.name || 'Unknown';
+                            const value = param.value !== undefined ? param.value : 'N/A';
+                            const units = param.units || '';
+                            const desc = param.description || '';
+                            html += `<div style="margin-bottom: 8px; padding: 8px; background: #f8fafc; border-radius: 4px;">`;
+                            html += `<strong>${name}</strong>: ${value} ${units}`;
+                            if (desc) html += `<br/><span style="font-size: 11px; color: #64748b;">${desc}</span>`;
+                            html += `</div>`;
+                        });
+                    } else {
+                        html = '<div style="color: #94a3b8; font-style: italic;">No parameters extracted.</div>';
+                    }
                 }
                 meshParameters.innerHTML = html;
             }

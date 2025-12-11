@@ -1,0 +1,6 @@
+{
+    "target": "partgen.bbox_estimator.auto_mask_api.AutoMask",
+    "params": {
+        "ckpt_path": "checkpoints/p3sam.ckpt"
+    }
+}

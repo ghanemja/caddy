@@ -2,7 +2,7 @@
 Mesh processing routes blueprint
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 import os
 import sys
 import tempfile
@@ -16,10 +16,90 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 sys.path.insert(0, BASE_DIR)
 
 
+@bp.post("/api/mesh/clear_gpu_memory")
+def clear_gpu_memory():
+    """Clear GPU memory by unloading segmentation models."""
+    try:
+        from meshml.segmentation import create_segmentation_backend
+        import torch
+
+        if not torch.cuda.is_available():
+            return jsonify({"status": "info", "message": "CUDA not available"}), 200
+
+        before_allocated = torch.cuda.memory_allocated() / 1024**3
+        before_reserved = torch.cuda.memory_reserved() / 1024**3
+
+        # Try to get and clear the Hunyuan3D backend if it exists
+        try:
+            backend_kind = os.environ.get("SEGMENTATION_BACKEND", "hunyuan3d").lower()
+            if backend_kind == "hunyuan3d":
+                # Create a temporary backend instance to access clear_gpu_memory method
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                temp_backend = create_segmentation_backend(
+                    kind=backend_kind, device=device
+                )
+                if hasattr(temp_backend, "clear_gpu_memory"):
+                    result = temp_backend.clear_gpu_memory()
+                    return (
+                        jsonify(
+                            {
+                                "status": "success",
+                                "message": f"Cleared {result['freed_gb']:.2f} GB GPU memory",
+                                **result,
+                            }
+                        ),
+                        200,
+                    )
+        except Exception as e:
+            print(f"[clear_gpu_memory] Could not use backend clear method: {e}")
+
+        # Fallback: simple cache clear
+        import gc
+
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+        after_allocated = torch.cuda.memory_allocated() / 1024**3
+        after_reserved = torch.cuda.memory_reserved() / 1024**3
+        freed = before_reserved - after_reserved
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": f"Cleared {freed:.2f} GB GPU memory (cache only)",
+                    "before": {
+                        "allocated_gb": round(before_allocated, 2),
+                        "reserved_gb": round(before_reserved, 2),
+                    },
+                    "after": {
+                        "allocated_gb": round(after_allocated, 2),
+                        "reserved_gb": round(after_reserved, 2),
+                    },
+                    "freed_gb": round(freed, 2),
+                    "note": "Note: Model may still be in memory. Restart server to fully clear.",
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        return (
+            jsonify(
+                {"status": "error", "message": f"Failed to clear GPU memory: {str(e)}"}
+            ),
+            500,
+        )
+
+
 @bp.post("/ingest_mesh_segment")
 def ingest_mesh_segment():
     """
-    Step 1: Run segmentation only (fast, ~1-5 seconds).
+    Step 1: Run segmentation only (fast, ~1-5 minutes).
     Returns part information for user labeling.
 
     Accepts:
@@ -83,9 +163,13 @@ def ingest_mesh_segment():
                 500,
             )
 
-        # Run segmentation only (fast, ~1-5 seconds)
+        # Run segmentation only (fast, ~1-5 minutes)
+        # Use environment variable or reasonable default (5000 minimum for P3-SAM)
+        default_num_points = int(os.environ.get("P3SAM_INFERENCE_POINT_NUM", "5000"))
+        if default_num_points < 5000:
+            default_num_points = 5000  # Minimum for reliable segmentation
         print(f"[ingest_mesh_segment] Running part segmentation...")
-        seg_result = model.segment(mesh_path, num_points=2048)
+        seg_result = model.segment(mesh_path, num_points=default_num_points)
         points = seg_result.points
         labels = seg_result.labels
         unique_labels = np.unique(labels)
@@ -219,11 +303,18 @@ def ingest_mesh_segment():
         )
 
         # Return segmentation results only (user will label parts, then call /ingest_mesh_label)
+        # Include points and labels for point cloud visualization
         response_data = {
             "ok": True,
             "segmentation": segmentation_summary,
             "part_table": part_table_json,
             "vertex_labels": vertex_labels_for_frontend,  # Use PartTable vertex labels (matches mesh)
+            "points": (
+                points.tolist() if points is not None else None
+            ),  # Point cloud coordinates for visualization
+            "labels": (
+                labels.tolist() if labels is not None else None
+            ),  # Point labels for coloring
             "mesh_path": mesh_path,
             "temp_dir": temp_dir,
         }
@@ -357,18 +448,163 @@ def ingest_mesh_label():
     """
     from run import _INGEST_RESULT_CACHE
 
+    # Debug: Check current MAX_CONTENT_LENGTH setting
+    try:
+        current_limit = current_app.config.get("MAX_CONTENT_LENGTH", "Not set")
+        if isinstance(current_limit, (int, float)):
+            print(
+                f"[ingest_mesh_label] Current MAX_CONTENT_LENGTH: {current_limit} bytes ({current_limit / (1024*1024):.1f} MB)",
+                flush=True,
+            )
+        else:
+            print(
+                f"[ingest_mesh_label] Current MAX_CONTENT_LENGTH: {current_limit}",
+                flush=True,
+            )
+    except Exception as e:
+        print(
+            f"[ingest_mesh_label] Could not check MAX_CONTENT_LENGTH: {e}", flush=True
+        )
+
     try:
         import json
         from pathlib import Path
 
-        # Get data from request
-        data = request.get_json()
-        if not data:
-            return jsonify({"ok": False, "error": "JSON body required"}), 400
+        # Get data from request (can be JSON or FormData)
+        mesh_path = None
+        temp_dir = None
+        part_labels_json = None
+        segmentation_data = None
 
-        mesh_path = data.get("mesh_path")
-        temp_dir = data.get("temp_dir")
-        part_labels_json = data.get("part_labels")  # User-provided labels
+        # Check content length before parsing
+        content_length = request.content_length
+        max_length = current_app.config.get("MAX_CONTENT_LENGTH", 16 * 1024 * 1024)
+
+        # Debug: Log request size
+        if content_length:
+            print(
+                f"[ingest_mesh_label] Request size: {content_length / (1024*1024):.2f} MB",
+                flush=True,
+            )
+            print(
+                f"[ingest_mesh_label] Max allowed: {max_length / (1024*1024):.2f} MB",
+                flush=True,
+            )
+
+        if content_length and content_length > max_length:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": f"Request too large: {content_length / (1024*1024):.1f} MB exceeds limit of {max_length / (1024*1024):.1f} MB",
+                    }
+                ),
+                413,
+            )
+
+        if request.is_json:
+            # JSON request
+            data = request.get_json()
+            if not data:
+                return jsonify({"ok": False, "error": "JSON body required"}), 400
+            mesh_path = data.get("mesh_path")
+            temp_dir = data.get("temp_dir")
+            part_labels_json = data.get("part_labels")
+            segmentation_data = data.get("segmentation_data")
+        else:
+            # FormData (for file uploads) - use try/except to handle size errors gracefully
+            try:
+                data = request.form.to_dict()
+            except Exception as form_error:
+                # If form parsing fails due to size, provide helpful error
+                if "413" in str(form_error) or "RequestEntityTooLarge" in str(
+                    type(form_error).__name__
+                ):
+                    return (
+                        jsonify(
+                            {
+                                "ok": False,
+                                "error": f"Upload too large. Current limit: {max_length / (1024*1024):.1f} MB. Try compressing images or reducing resolution.",
+                                "content_length": content_length,
+                                "max_length": max_length,
+                            }
+                        ),
+                        413,
+                    )
+                raise
+
+            mesh_path = data.get("mesh_path")
+            temp_dir = data.get("temp_dir")
+
+            # Parse part_labels if provided as JSON string
+            part_labels_json_str = data.get("part_labels")
+            if part_labels_json_str:
+                try:
+                    part_labels_json = json.loads(part_labels_json_str)
+                except Exception as e:
+                    print(
+                        f"[ingest_mesh_label] Warning: Could not parse part_labels JSON: {e}",
+                        flush=True,
+                    )
+                    part_labels_json = None
+
+            # Parse segmentation_data if provided as JSON string
+            segmentation_data_str = data.get("segmentation_data")
+            if segmentation_data_str:
+                try:
+                    segmentation_data = json.loads(segmentation_data_str)
+                except Exception as e:
+                    print(
+                        f"[ingest_mesh_label] Warning: Could not parse segmentation_data JSON: {e}",
+                        flush=True,
+                    )
+                    segmentation_data = None
+
+        # Get existing images (from frontend canvas snapshots or uploaded reference images)
+        existing_images = []
+        reference_image_path = (
+            None  # Track reference image separately for classification
+        )
+        # Check for uploaded reference image
+        if "reference_image" in request.files:
+            ref_file = request.files["reference_image"]
+            if ref_file and ref_file.filename:
+                ref_path = os.path.join(temp_dir, "reference_image.png")
+                ref_file.save(ref_path)
+                existing_images.append(ref_path)
+                reference_image_path = ref_path  # Store for prioritized classification
+                print(
+                    f"[ingest_mesh_label] ✓ Saved reference image from Step 1: {ref_path}",
+                    flush=True,
+                )
+                print(
+                    f"[ingest_mesh_label]   This image will be used for category classification",
+                    flush=True,
+                )
+        # Check for canvas snapshot
+        if "canvas_snapshot" in request.files:
+            snapshot_file = request.files["canvas_snapshot"]
+            if snapshot_file and snapshot_file.filename:
+                snapshot_path = os.path.join(temp_dir, "canvas_snapshot.png")
+                snapshot_file.save(snapshot_path)
+                existing_images.append(snapshot_path)
+                print(
+                    f"[ingest_mesh_label] Saved canvas snapshot: {snapshot_path}",
+                    flush=True,
+                )
+        # Also check in JSON data (if sent as base64 or paths)
+        if data.get("reference_image_path"):
+            ref_path = data.get("reference_image_path")
+            if os.path.exists(ref_path):
+                existing_images.append(ref_path)
+                if (
+                    not reference_image_path
+                ):  # Only set if not already set from file upload
+                    reference_image_path = ref_path
+        if data.get("canvas_snapshot_path"):
+            snapshot_path = data.get("canvas_snapshot_path")
+            if os.path.exists(snapshot_path):
+                existing_images.append(snapshot_path)
 
         if not mesh_path or not os.path.exists(mesh_path):
             return (
@@ -380,13 +616,16 @@ def ingest_mesh_label():
             f"[ingest_mesh_label] Processing mesh with user labels: {mesh_path}",
             flush=True,
         )
+        print(
+            f"[ingest_mesh_label] NOTE: This step does NOT run segmentation - using data from step 1",
+            flush=True,
+        )
 
         # Import pipeline
         parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if parent_dir not in sys.path:
             sys.path.insert(0, parent_dir)
 
-        from meshml.segmentation import create_segmentation_backend
         from app.services.vlm_client_finetuned import FinetunedVLMClient
         from meshml.semantics.vlm_client_ollama import OllamaVLMClient
         from meshml.semantics.vlm_client import DummyVLMClient
@@ -394,51 +633,94 @@ def ingest_mesh_label():
         from meshml.parts.parts import (
             build_part_table_from_segmentation,
             apply_labels_from_json,
+            PartTable,
+            PartInfo,
         )
         import torch
+        import trimesh
+        import numpy as np
 
-        # Initialize segmentation backend (reuse from step 1)
+        # Determine device for VLM (not for segmentation - we're not running segmentation)
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        backend_kind = os.environ.get("SEGMENTATION_BACKEND", "hunyuan3d").lower()
-        model = create_segmentation_backend(kind=backend_kind, device=device)
 
-        # Re-run segmentation to get PartTable (or we could cache it from step 1)
-        seg_result = model.segment(mesh_path, num_points=2048)
-        mesh = trimesh.load(mesh_path)
-        if isinstance(mesh, trimesh.Scene):
-            mesh = mesh.dump(concatenate=True)
-        vertices = np.array(mesh.vertices, dtype=np.float32)
+        # Reconstruct PartTable from step 1 data (NO segmentation needed)
+        # If we have segmentation_data from step 1, use it directly
+        if segmentation_data and segmentation_data.get("part_table"):
+            # Reconstruct PartTable from JSON
+            from meshml.parts.parts import PartTable, PartInfo
 
-        vertex_labels = seg_result.labels
-        if len(vertex_labels) != len(vertices):
-            if len(vertex_labels) < len(vertices):
-                vertex_labels = np.pad(
-                    vertex_labels, (0, len(vertices) - len(vertex_labels)), mode="edge"
+            part_table_dict = segmentation_data["part_table"]
+            parts_dict = {}
+            for part_entry in part_table_dict.get("parts", []):
+                part_id = part_entry["part_id"]
+                part_info = PartInfo(
+                    part_id=part_id,
+                    name=part_entry.get("name"),
+                    description=part_entry.get("description"),
+                    centroid=np.array(
+                        part_entry.get("centroid", [0, 0, 0]), dtype=np.float32
+                    ),
+                    bbox_min=np.array(
+                        part_entry.get("bbox_min", [0, 0, 0]), dtype=np.float32
+                    ),
+                    bbox_max=np.array(
+                        part_entry.get("bbox_max", [0, 0, 0]), dtype=np.float32
+                    ),
+                    extents=np.array(
+                        part_entry.get("extents", [1, 1, 1]), dtype=np.float32
+                    ),
+                    touches_ground=part_entry.get("touches_ground", False),
+                    extra=part_entry.get("extra", {}),
                 )
-            else:
-                vertex_labels = vertex_labels[: len(vertices)]
+                parts_dict[part_id] = part_info
 
-        # Extract preliminary names from segmentation (same as in ingest_mesh_segment)
-        from meshml.pointnet_seg.labels import get_category_from_flat_label
+            vertex_labels = np.array(
+                segmentation_data.get("vertex_labels", []), dtype=np.int32
+            )
+            part_table = PartTable(parts=parts_dict, vertex_part_labels=vertex_labels)
+            print(
+                f"[ingest_mesh_label] ✓ Reconstructed PartTable from step 1 data ({len(part_table.parts)} parts)",
+                flush=True,
+            )
+        else:
+            # Fallback: if segmentation_data not provided, we need to load mesh and reconstruct
+            # But we should NOT run segmentation - this is a fallback only
+            print(
+                f"[ingest_mesh_label] Warning: segmentation_data not provided, attempting to reconstruct PartTable from mesh only",
+                flush=True,
+            )
+            print(
+                f"[ingest_mesh_label] NOTE: This should not happen - step 1 should provide segmentation_data",
+                flush=True,
+            )
+            # Load mesh for geometry only (no segmentation)
+            mesh = trimesh.load(mesh_path)
+            if isinstance(mesh, trimesh.Scene):
+                mesh = mesh.dump(concatenate=True)
+            vertices = np.array(mesh.vertices, dtype=np.float32)
 
-        unique_labels = np.unique(vertex_labels)
-        part_label_names = {}
-        for label_id in unique_labels:
-            label_id_int = int(label_id)
-            result = get_category_from_flat_label(label_id_int)
-            if result:
-                cat, part_name = result
-                part_label_names[label_id_int] = part_name
-            else:
-                part_label_names[label_id_int] = f"part_{label_id_int}"
+            # Create minimal PartTable - this is not ideal but better than re-running segmentation
+            # We'll create a single part for the whole mesh
+            from meshml.parts.parts import PartInfo
 
-        # Build PartTable with preliminary names
-        part_table = build_part_table_from_segmentation(
-            vertices=vertices,
-            part_labels=vertex_labels,
-            ground_plane_z=None,
-            preliminary_names=part_label_names,
-        )
+            part_info = PartInfo(
+                part_id=0,
+                name=None,
+                centroid=np.mean(vertices, axis=0).astype(np.float32),
+                bbox_min=vertices.min(axis=0).astype(np.float32),
+                bbox_max=vertices.max(axis=0).astype(np.float32),
+                extents=(vertices.max(axis=0) - vertices.min(axis=0)).astype(
+                    np.float32
+                ),
+            )
+            vertex_labels = np.zeros(len(vertices), dtype=np.int32)
+            part_table = PartTable(
+                parts={0: part_info}, vertex_part_labels=vertex_labels
+            )
+            print(
+                f"[ingest_mesh_label] ⚠ Created minimal PartTable (fallback - segmentation should have been provided)",
+                flush=True,
+            )
 
         # Apply user-provided labels
         if part_labels_json:
@@ -447,51 +729,153 @@ def ingest_mesh_label():
                 f"[ingest_mesh_label] Applied user labels to {len(part_labels_json.get('parts', []))} parts",
                 flush=True,
             )
+            # Debug: Print all user-provided part names
+            for part_entry in part_labels_json.get("parts", []):
+                part_id = part_entry.get("part_id")
+                user_name = part_entry.get("name")
+                if part_id is not None and user_name:
+                    print(
+                        f"[ingest_mesh_label]   Part {part_id}: user provided name = '{user_name}'",
+                        flush=True,
+                    )
+            # Verify names are set in PartTable
+            for part_id, part_info in part_table.parts.items():
+                if part_info.name:
+                    print(
+                        f"[ingest_mesh_label]   ✓ PartTable part {part_id} has name: '{part_info.name}'",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[ingest_mesh_label]   ⚠ PartTable part {part_id} has NO name (will use provisional)",
+                        flush=True,
+                    )
 
         # Initialize VLM (same logic as before)
         vlm = None
+        vlm_model_info = None
+
         if device == "cpu":
             try:
                 vlm = OllamaVLMClient()
-                print("[ingest_mesh_label] Using Ollama VLM (fast on CPU)")
+                # Get Ollama model name from environment
+                ollama_model = os.environ.get("OLLAMA_MODEL", "llava:latest")
+                vlm_model_info = f"Ollama ({ollama_model})"
+                print(
+                    f"[ingest_mesh_label] ✓ Using Ollama VLM: {ollama_model} (fast on CPU)"
+                )
             except Exception as e:
                 print(f"[ingest_mesh_label] Warning: Could not use Ollama: {e}")
-            try:
-                vlm = FinetunedVLMClient()
-                print("[ingest_mesh_label] Using fine-tuned VLM (slower on CPU)")
-            except Exception as e2:
-                print(
-                    f"[ingest_mesh_label] Warning: Could not use fine-tuned VLM: {e2}"
-                )
+            if not vlm:
+                try:
+                    vlm = FinetunedVLMClient()
+                    finetuned_path = os.environ.get(
+                        "FINETUNED_MODEL_PATH",
+                        "backend/checkpoints/onevision_lora_small/checkpoint-4",
+                    )
+                    vlm_model_info = f"Fine-tuned LlavaOnevision (base: llava-hf/llava-onevision-qwen2-7b-ov-hf, adapter: {finetuned_path})"
+                    print(f"[ingest_mesh_label] ✓ Using fine-tuned VLM (slower on CPU)")
+                    print(
+                        f"[ingest_mesh_label]   Model: llava-hf/llava-onevision-qwen2-7b-ov-hf"
+                    )
+                    print(f"[ingest_mesh_label]   Adapter: {finetuned_path}")
+                except Exception as e2:
+                    print(
+                        f"[ingest_mesh_label] Warning: Could not use fine-tuned VLM: {e2}"
+                    )
+            if not vlm:
                 vlm = DummyVLMClient()
-                print("[ingest_mesh_label] Using dummy VLM (for testing)")
+                vlm_model_info = "Dummy (testing only)"
+                print(
+                    "[ingest_mesh_label] ⚠ Using dummy VLM (for testing - no real model)"
+                )
         else:
             try:
                 vlm = FinetunedVLMClient()
-                print(
-                    "[ingest_mesh_label] Using fine-tuned VLM (pretrained model on GPU)"
+                finetuned_path = os.environ.get(
+                    "FINETUNED_MODEL_PATH",
+                    "backend/checkpoints/onevision_lora_small/checkpoint-4",
                 )
+                vlm_model_info = f"Fine-tuned LlavaOnevision (base: llava-hf/llava-onevision-qwen2-7b-ov-hf, adapter: {finetuned_path})"
+                print(
+                    f"[ingest_mesh_label] ✓ Using fine-tuned VLM (pretrained model on GPU)"
+                )
+                print(
+                    f"[ingest_mesh_label]   Model: llava-hf/llava-onevision-qwen2-7b-ov-hf"
+                )
+                print(f"[ingest_mesh_label]   Adapter: {finetuned_path}")
             except Exception as e:
                 print(f"[ingest_mesh_label] Warning: Could not use fine-tuned VLM: {e}")
                 try:
                     vlm = OllamaVLMClient()
-                    print("[ingest_mesh_label] Using Ollama VLM (fallback)")
+                    ollama_model = os.environ.get("OLLAMA_MODEL", "llava:latest")
+                    vlm_model_info = f"Ollama ({ollama_model})"
+                    print(
+                        f"[ingest_mesh_label] ✓ Using Ollama VLM (fallback): {ollama_model}"
+                    )
                 except Exception as e2:
                     print(f"[ingest_mesh_label] Warning: Could not use Ollama: {e2}")
                     vlm = DummyVLMClient()
-                    print("[ingest_mesh_label] Using dummy VLM (for testing)")
+                    vlm_model_info = "Dummy (testing only)"
+                    print(
+                        "[ingest_mesh_label] ⚠ Using dummy VLM (for testing - no real model)"
+                    )
+
+        # Store model info for later reference
+        if vlm_model_info:
+            print(
+                f"[ingest_mesh_label] VLM Model Summary: {vlm_model_info}", flush=True
+            )
 
         # Run ingestion pipeline with user-labeled PartTable
         render_dir = os.path.join(temp_dir, "renders")
         os.makedirs(render_dir, exist_ok=True)
 
         print(f"[ingest_mesh_label] Running VLM-based semantic parameter extraction...")
+        print(
+            f"[ingest_mesh_label] NOTE: No segmentation will be run - using PartTable from step 1",
+            flush=True,
+        )
+
+        # Extract points and labels from segmentation_data if available (for raw parameter extraction)
+        # Note: If points/labels not provided, we'll sample from mesh (they're not needed for VLM)
+        points = None
+        labels = None
+        if segmentation_data:
+            if segmentation_data.get("points"):
+                points = np.array(segmentation_data["points"], dtype=np.float32)
+                print(
+                    f"[ingest_mesh_label] Using points from segmentation_data: {len(points)} points",
+                    flush=True,
+                )
+            if segmentation_data.get("labels"):
+                labels = np.array(segmentation_data["labels"], dtype=np.int32)
+                print(
+                    f"[ingest_mesh_label] Using labels from segmentation_data: {len(labels)} labels",
+                    flush=True,
+                )
+
+        # If points/labels not provided, we'll sample from mesh in ingest_mesh_to_semantic_params
+        if points is None or labels is None:
+            print(
+                f"[ingest_mesh_label] Points/labels not in segmentation_data - will sample from mesh if needed",
+                flush=True,
+            )
+
+        # Use environment variable or reasonable default (None = let function decide)
         ingest_result = ingest_mesh_to_semantic_params(
             mesh_path=mesh_path,
             vlm=vlm,
-            model=model,  # Segmentation backend
+            model=None,  # No segmentation backend needed - we have PartTable from step 1
             render_output_dir=render_dir,
-            num_points=2048,
+            num_points=None,  # None = use environment variable or default (5000 minimum)
+            part_table=part_table,  # Provide PartTable to skip segmentation
+            points=points,  # Provide points if available
+            labels=labels,  # Provide labels if available
+            existing_images=(
+                existing_images if existing_images else None
+            ),  # Use existing images if provided
+            reference_image_path=reference_image_path,  # Pass reference image for prioritized classification
         )
 
         # Override the part_table with the user-labeled one
@@ -507,7 +891,263 @@ def ingest_mesh_label():
             f"[ingest_mesh_label]   Parameters: {len(ingest_result.final_parameters)} semantic params"
         )
 
-        # Convert FinalParameter objects to dicts for JSON serialization
+        # Build hierarchical structure: Category -> Parts -> Parameters
+        def build_hierarchical_structure(ingest_result, part_table):
+            """Build hierarchical output: Category -> Parts -> Parameters."""
+            hierarchical = {
+                "category": ingest_result.category,
+                "category_confidence": ingest_result.pre_output.raw_response.get(
+                    "category_confidence", 1.0
+                ),
+                "category_reasoning": ingest_result.pre_output.raw_response.get(
+                    "category_reasoning", ""
+                ),
+                "parts": {},
+            }
+
+            # Group parameters by part
+            if part_table:
+                # Initialize parts structure
+                for part_id, part_info in part_table.parts.items():
+                    # CRITICAL: Prioritize user-provided name (part_info.name) over provisional
+                    # This ensures user input from Step 3 is used
+                    part_name = part_info.name
+                    if not part_name:
+                        # Fallback to provisional name if no user-provided name
+                        part_name = (
+                            part_info.extra.get("provisional_name")
+                            if part_info.extra
+                            else None
+                        )
+                    if not part_name:
+                        # Last resort: use part_X format
+                        part_name = f"part_{part_id}"
+
+                    print(
+                        f"[build_hierarchical] Initializing part {part_id} with name: '{part_name}' (user-provided: {bool(part_info.name)})",
+                        flush=True,
+                    )
+
+                    hierarchical["parts"][part_name] = {
+                        "part_id": part_id,
+                        "description": part_info.description
+                        or f"{part_name} component",
+                        "geometry": {
+                            "centroid": (
+                                part_info.centroid.tolist()
+                                if hasattr(part_info.centroid, "tolist")
+                                else list(part_info.centroid)
+                            ),
+                            "extents": (
+                                part_info.extents.tolist()
+                                if hasattr(part_info.extents, "tolist")
+                                else list(part_info.extents)
+                            ),
+                            "bbox_min": (
+                                part_info.bbox_min.tolist()
+                                if hasattr(part_info.bbox_min, "tolist")
+                                else list(part_info.bbox_min)
+                            ),
+                            "bbox_max": (
+                                part_info.bbox_max.tolist()
+                                if hasattr(part_info.bbox_max, "tolist")
+                                else list(part_info.bbox_max)
+                            ),
+                        },
+                        "parameters": [],
+                    }
+
+                # Assign parameters to parts
+                print(
+                    f"[build_hierarchical] Total parameters: {len(ingest_result.final_parameters)}",
+                    flush=True,
+                )
+                print(
+                    f"[build_hierarchical] Total parts in hierarchical: {len(hierarchical['parts'])}",
+                    flush=True,
+                )
+
+                # Create a reverse lookup: part_id -> part_name for faster matching
+                part_id_to_name = {}
+                for part_id, part_info in part_table.parts.items():
+                    # CRITICAL: Prioritize user-provided name (part_info.name) over provisional
+                    part_name = part_info.name
+                    if not part_name:
+                        part_name = (
+                            part_info.extra.get("provisional_name")
+                            if part_info.extra
+                            else None
+                        )
+                    if not part_name:
+                        part_name = f"part_{part_id}"
+                    part_id_to_name[part_id] = part_name
+                    print(
+                        f"[build_hierarchical] Part ID {part_id} -> name: '{part_name}' (user-provided: {bool(part_info.name)})",
+                        flush=True,
+                    )
+
+                unmatched_params = []
+                for fp in ingest_result.final_parameters:
+                    part_labels = getattr(fp, "part_labels", None) or []
+                    print(
+                        f"[build_hierarchical] Parameter {fp.id} ({fp.semantic_name}) has part_labels: {part_labels}",
+                        flush=True,
+                    )
+
+                    matched = False
+                    # Try to match via part_labels
+                    for label in part_labels:
+                        part_name = None
+                        # Try to parse as part_id first (most reliable)
+                        try:
+                            # Handle both "part_0" and "0" formats
+                            label_clean = label.replace("part_", "").strip()
+                            part_id = int(label_clean)
+                            if part_id in part_id_to_name:
+                                part_name = part_id_to_name[part_id]
+                                print(
+                                    f"[build_hierarchical] Matched parameter {fp.id} to part_id {part_id} -> {part_name}",
+                                    flush=True,
+                                )
+                        except (ValueError, AttributeError):
+                            # Try to find by name
+                            if part_table and hasattr(part_table, "get_part_by_name"):
+                                part = part_table.get_part_by_name(label)
+                                if part:
+                                    part_name = (
+                                        part.name
+                                        or (
+                                            part.extra.get("provisional_name")
+                                            if part.extra
+                                            else None
+                                        )
+                                        or f"part_{part.part_id}"
+                                    )
+
+                        if part_name and part_name in hierarchical["parts"]:
+                            hierarchical["parts"][part_name]["parameters"].append(
+                                {
+                                    "id": fp.id,
+                                    "semantic_name": fp.semantic_name,
+                                    "name": fp.semantic_name,  # Alias
+                                    "value": float(fp.value),
+                                    "units": fp.units or "normalized",
+                                    "description": fp.description,
+                                    "confidence": (
+                                        float(fp.confidence) if fp.confidence else 0.0
+                                    ),
+                                }
+                            )
+                            matched = True
+                            print(
+                                f"[build_hierarchical] ✓ Added parameter {fp.id} to part {part_name}",
+                                flush=True,
+                            )
+                            break
+
+                    if not matched:
+                        unmatched_params.append(fp)
+                        print(
+                            f"[build_hierarchical] ⚠ Parameter {fp.id} ({fp.semantic_name}) could not be matched to any part",
+                            flush=True,
+                        )
+
+                # If there are unmatched parameters, try to assign them based on raw_sources
+                # or distribute them to parts that have no parameters
+                if unmatched_params:
+                    print(
+                        f"[build_hierarchical] {len(unmatched_params)} unmatched parameters, attempting to assign...",
+                        flush=True,
+                    )
+                    # Find parts with no parameters
+                    parts_without_params = [
+                        name
+                        for name, part_data in hierarchical["parts"].items()
+                        if len(part_data["parameters"]) == 0
+                    ]
+
+                    # Try to match based on raw parameter sources
+                    for fp in unmatched_params:
+                        # Try to extract part_id from raw_sources if available
+                        assigned = False
+                        if fp.raw_sources:
+                            for source_id in fp.raw_sources:
+                                # raw parameters might have part_labels
+                                # Check if we can find the part from the raw parameter
+                                # For now, assign to first part without parameters
+                                if parts_without_params:
+                                    part_name = parts_without_params.pop(0)
+                                    hierarchical["parts"][part_name][
+                                        "parameters"
+                                    ].append(
+                                        {
+                                            "id": fp.id,
+                                            "semantic_name": fp.semantic_name,
+                                            "name": fp.semantic_name,
+                                            "value": float(fp.value),
+                                            "units": fp.units or "normalized",
+                                            "description": fp.description,
+                                            "confidence": (
+                                                float(fp.confidence)
+                                                if fp.confidence
+                                                else 0.0
+                                            ),
+                                        }
+                                    )
+                                    print(
+                                        f"[build_hierarchical] Assigned unmatched parameter {fp.id} to {part_name} (fallback)",
+                                        flush=True,
+                                    )
+                                    assigned = True
+                                    break
+
+                        if not assigned and hierarchical["parts"]:
+                            # Last resort: assign to first part
+                            first_part_name = next(iter(hierarchical["parts"].keys()))
+                            hierarchical["parts"][first_part_name]["parameters"].append(
+                                {
+                                    "id": fp.id,
+                                    "semantic_name": fp.semantic_name,
+                                    "name": fp.semantic_name,
+                                    "value": float(fp.value),
+                                    "units": fp.units or "normalized",
+                                    "description": fp.description,
+                                    "confidence": (
+                                        float(fp.confidence) if fp.confidence else 0.0
+                                    ),
+                                }
+                            )
+                            print(
+                                f"[build_hierarchical] Assigned unmatched parameter {fp.id} to {first_part_name} (last resort)",
+                                flush=True,
+                            )
+
+            # If no part_table, create a flat structure with all parameters under a generic part
+            if not part_table or not hierarchical["parts"]:
+                hierarchical["parts"]["all_parts"] = {
+                    "part_id": -1,
+                    "description": "All parts combined",
+                    "geometry": {},
+                    "parameters": [],
+                }
+                for fp in ingest_result.final_parameters:
+                    hierarchical["parts"]["all_parts"]["parameters"].append(
+                        {
+                            "id": fp.id,
+                            "semantic_name": fp.semantic_name,
+                            "name": fp.semantic_name,
+                            "value": float(fp.value),
+                            "units": fp.units or "normalized",
+                            "description": fp.description,
+                            "confidence": (
+                                float(fp.confidence) if fp.confidence else 0.0
+                            ),
+                        }
+                    )
+
+            return hierarchical
+
+        # Convert FinalParameter objects to dicts for JSON serialization (flat format for backward compatibility)
         def final_param_to_dict(fp):
             """Convert FinalParameter to dict."""
             part_labels = getattr(fp, "part_labels", None) or []
@@ -516,7 +1156,11 @@ def ingest_mesh_label():
                 named_labels = []
                 for label in part_labels:
                     # Try to find part by name or ID
-                    part = ingest_result.part_table.get_part_by_name(label)
+                    part = (
+                        ingest_result.part_table.get_part_by_name(label)
+                        if hasattr(ingest_result.part_table, "get_part_by_name")
+                        else None
+                    )
                     if not part:
                         # Try to parse as part_id
                         try:
@@ -525,7 +1169,15 @@ def ingest_mesh_label():
                         except:
                             pass
                     if part:
-                        named_labels.append(part.name or part.provisional_name or label)
+                        named_labels.append(
+                            part.name
+                            or (
+                                part.extra.get("provisional_name")
+                                if part.extra
+                                else None
+                            )
+                            or label
+                        )
                     else:
                         named_labels.append(label)
                 part_labels = named_labels
@@ -551,10 +1203,18 @@ def ingest_mesh_label():
                 "description": rp.description,
             }
 
-        # Return results
+        # Build hierarchical structure
+        hierarchical_structure = build_hierarchical_structure(
+            ingest_result, ingest_result.part_table
+        )
+
+        # Return results with both hierarchical and flat formats
         response_data = {
             "ok": True,
             "category": ingest_result.category,
+            # Hierarchical structure: Category -> Parts -> Parameters
+            "hierarchical": hierarchical_structure,
+            # Flat format for backward compatibility
             "final_parameters": [
                 final_param_to_dict(fp) for fp in ingest_result.final_parameters
             ],
@@ -571,6 +1231,23 @@ def ingest_mesh_label():
 
     except Exception as e:
         import traceback
+        from werkzeug.exceptions import RequestEntityTooLarge
+
+        # Handle 413 errors specifically with better messaging
+        if (
+            isinstance(e, RequestEntityTooLarge)
+            or "413" in str(e)
+            or "RequestEntityTooLarge" in str(type(e).__name__)
+        ):
+            max_length = current_app.config.get("MAX_CONTENT_LENGTH", 16 * 1024 * 1024)
+            content_length = getattr(request, "content_length", None)
+            error_msg = f"Upload too large. "
+            if content_length:
+                error_msg += f"Received: {content_length / (1024*1024):.1f} MB. "
+            error_msg += f"Limit: {max_length / (1024*1024):.1f} MB. "
+            error_msg += "Try compressing images or reducing canvas resolution."
+            print(f"[ingest_mesh_label] {error_msg}", flush=True)
+            return jsonify({"ok": False, "error": error_msg}), 413
 
         error_msg = f"Mesh labeling/VLM error: {str(e)}"
         print(f"[ingest_mesh_label] {error_msg}", flush=True)

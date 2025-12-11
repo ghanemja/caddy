@@ -10,16 +10,46 @@ else
 fi
 
 # Activate conda environment
-conda activate freecad #vlm_optimizer
+conda activate freecad 
 if [ $? -ne 0 ]; then
-    echo "Error: Failed to activate vlm_optimizer environment"
+    echo "Error: Failed to activate freecad environment"
     echo "Available environments:"
     conda env list
     exit 1
 fi
 
-# Set library path (Linux uses LD_LIBRARY_PATH, not DYLD_LIBRARY_PATH)
-export LD_LIBRARY_PATH="$CONDA_BASE/envs/vlm_optimizer/lib:$LD_LIBRARY_PATH"
+# Set library path
+export LD_LIBRARY_PATH="$CONDA_BASE/envs/freecad/lib:$LD_LIBRARY_PATH"
+
+# --- MEMORY OPTIMIZATIONS (CRITICAL) ---
+
+# 1. Reduce Fragmentation
+# This helps PyTorch use the "Reserved" but "Unallocated" memory seen in your logs
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# 2. Enable Mixed Precision
+export TORCH_CUDNN_V8_API_ENABLED=1
+export P3SAM_USE_AUTOCAST=1
+
+# 3. Reduce Model Resolution (The Main Fix)
+# Lowering point counts drastically reduces the VRAM tensor size.
+# Changed from 15000 -> 10000
+export P3SAM_POINT_NUM=10000            
+export P3SAM_INFERENCE_POINT_NUM=10000  
+
+# 4. Reduce Complexity
+# Lowering prompt counts reduces the number of masks the model tries to generate at once.
+# Changed from 75 -> 50
+export P3SAM_PROMPT_NUM=50              
+export P3SAM_INFERENCE_PROMPT_NUM=50    
+
+# 5. Reduce Batch Size
+# Processing fewer items at once frees up working memory.
+# Changed from 4 -> 2
+export P3SAM_PROMPT_BS=2                
+
+# ---------------------------------------
+
 CONDA_PYTHON="$CONDA_BASE/envs/freecad/bin/python"
 cd "$(dirname "$0")/backend"
 
@@ -29,4 +59,3 @@ else
     echo "Error: run.py not found"
     exit 1
 fi
-

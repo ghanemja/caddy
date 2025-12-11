@@ -7,3 +7,7 @@ Thumbs.db
 
 __pycache__
 .vscode
+backend/checkpoints/Hunyuan3D-Part/model/model.safetensors
+
+# Exclude large model files that exceed GitHub LFS 2GB limit
+backend/checkpoints/Hunyuan3D-Part/model/model.safetensors

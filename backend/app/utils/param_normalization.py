@@ -2,12 +2,13 @@
 Parameter normalization utilities
 Functions for normalizing and parsing CAD parameter changes
 """
+
 import re
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from app.utils.helpers import num as _num, clean_num as _clean_num
 
 
-def intent_to_changes(text: str) -> list[dict]:
+def intent_to_changes(text: str) -> List[Dict[str, Any]]:
     """
     Converts natural-language text like 'add 6 wheels' or
     'add six wheels on the base and align midpoints' into
@@ -64,7 +65,9 @@ def intent_to_changes(text: str) -> list[dict]:
     return changes
 
 
-def normalize_params(target: str, action: str, params: dict) -> dict:
+def normalize_params(
+    target: str, action: str, params: Dict[str, Any]
+) -> Dict[str, Any]:
     """Normalize parameters for a given target and action."""
     p = {}
     params = params or {}
@@ -78,6 +81,7 @@ def normalize_params(target: str, action: str, params: dict) -> dict:
 
     # Aliases (imported from run.py)
     from app.config import Config
+
     TARGET_ALIASES = Config.TARGET_ALIASES
     ACTION_ALIASES = Config.ACTION_ALIASES
     tgt = TARGET_ALIASES.get(tgt, tgt)
@@ -90,7 +94,9 @@ def normalize_params(target: str, action: str, params: dict) -> dict:
         if "width" in params:
             p["wheel_width"] = _num(params["width"])
         if "count" in params or "wheels_per_side" in params:
-            p["wheels_per_side"] = int(_num(params.get("wheels_per_side") or params.get("count"), 2))
+            p["wheels_per_side"] = int(
+                _num(params.get("wheels_per_side") or params.get("count"), 2)
+            )
         if "z_offset" in params or "z" in params:
             p["wheel_z_offset_mm"] = _num(params.get("z_offset") or params.get("z"))
     elif tgt in ("pan_tilt", "pan-tilt", "pantilt", "sensors"):
@@ -106,32 +112,45 @@ def normalize_params(target: str, action: str, params: dict) -> dict:
 
     # Copy any remaining params that match known keys
     known_keys = {
-        "wheel_diameter", "wheel_width", "wheels_per_side", "wheel_z_offset_mm",
-        "pan_tilt_offset_x", "pan_tilt_offset_y", "pan_tilt_offset_z",
-        "rover_yaw_deg", "axle_spacing_mm", "wheelbase_span_mm", "mirror_lr", "hide_wheels"
+        "wheel_diameter",
+        "wheel_width",
+        "wheels_per_side",
+        "wheel_z_offset_mm",
+        "pan_tilt_offset_x",
+        "pan_tilt_offset_y",
+        "pan_tilt_offset_z",
+        "rover_yaw_deg",
+        "axle_spacing_mm",
+        "wheelbase_span_mm",
+        "mirror_lr",
+        "hide_wheels",
     }
     for k, v in params.items():
         if k in known_keys:
-            p[k] = _clean_num(v) if k != "mirror_lr" and k != "hide_wheels" else _as_bool(v)
+            p[k] = (
+                _clean_num(v)
+                if k != "mirror_lr" and k != "hide_wheels"
+                else _as_bool(v)
+            )
 
     return p
 
 
-def normalize_change(ch: dict) -> Optional[dict]:
+def normalize_change(ch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Normalize a single change object."""
     if not isinstance(ch, dict):
         return None
-    
+
     action = (ch.get("action") or "").strip().lower()
     target = (ch.get("target_component") or ch.get("target") or "").strip().lower()
     params = ch.get("parameters") or ch.get("params") or {}
-    
+
     if not action or not target:
         return None
-    
+
     # Normalize parameters
     norm_params = normalize_params(target, action, params)
-    
+
     return {
         "action": action,
         "target_component": target,
@@ -139,7 +158,7 @@ def normalize_change(ch: dict) -> Optional[dict]:
     }
 
 
-def coerce_changes(payload: Any) -> List[dict]:
+def coerce_changes(payload: Any) -> List[Dict[str, Any]]:
     """Coerce various input formats to a list of change dicts."""
     if payload is None:
         return []
@@ -150,9 +169,8 @@ def coerce_changes(payload: Any) -> List[dict]:
     return []
 
 
-def mk_change(action: str, target: str, params: dict) -> dict:
+def mk_change(action: str, target: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Create a normalized change object."""
     ch = {"action": action, "target_component": target, "parameters": params}
     norm = normalize_change(ch)
     return norm or ch
-

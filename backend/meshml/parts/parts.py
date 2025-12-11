@@ -6,7 +6,7 @@ for human labeling and semantic operations.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
 
 
@@ -89,7 +89,7 @@ class PartTable:
         return None
 
 
-def compute_pca_axes_and_extents(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def compute_pca_axes_and_extents(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute PCA principal axes and extents for a set of points.
 
@@ -378,7 +378,18 @@ def apply_labels_from_json(
 
         # Update name if provided
         if "name" in part_entry and part_entry["name"]:
+            old_name = part_info.name
             part_info.name = str(part_entry["name"]).strip()
+            print(
+                f"[apply_labels_from_json] ✓ Set part {part_id} name: '{old_name}' -> '{part_info.name}'",
+                flush=True,
+            )
+        elif "name" in part_entry and part_entry["name"] is None:
+            # Explicitly None means user cleared it - keep existing name
+            print(
+                f"[apply_labels_from_json] Part {part_id} name cleared by user, keeping existing: '{part_info.name}'",
+                flush=True,
+            )
 
         # Update description if provided
         if "description" in part_entry:
