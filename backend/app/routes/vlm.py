@@ -39,8 +39,8 @@ def codegen():
         normalize_generated_code_advanced as _normalize_generated_code_advanced
     )
     from app.utils.inspection import baseline_cqparts_source as _baseline_cqparts_source
+    from app.services.vlm_service import build_codegen_prompt as _build_codegen_prompt
     from run import (
-        _build_codegen_prompt,
         _rebuild_and_save_glb,
         OLLAMA_MODEL
     )
@@ -188,7 +188,6 @@ def recommend():
     """Get VLM recommendations for CAD changes."""
     from app.utils.helpers import data_url_from_upload as _data_url_from_upload
     from run import (
-        _cad_state_json,
         _split_multi_json_and_summaries, call_vlm
     )
     from app.services.vlm.prompts_loader import get_system_prompt
@@ -206,6 +205,7 @@ def recommend():
         snapshot_url = _data_url_from_upload(request.files.get("snapshot"))
 
         # Build prompt
+        from app.services.state_service import cad_state_json as _cad_state_json
         cad_state = _cad_state_json()
         grounding_lines = [
             "Goal: Compare the REFERENCE image (photo/render) to the CURRENT CAD and propose precise, conservative changes that align CAD to the image.",

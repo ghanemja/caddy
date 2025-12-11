@@ -11,7 +11,8 @@ bp = Blueprint("test", __name__)
 def test_rotate():
     """Test rotation operation."""
     # Lazy import to avoid circular dependency
-    from run import _mk_change, _apply_changes_list
+    from run import _mk_change
+    from app.services.state_service import apply_changes_list as _apply_changes_list
     
     data = request.get_json(silent=True) or {}
     target = (data.get("target") or "rover").lower()
@@ -34,7 +35,8 @@ def test_rotate():
 def test_translate():
     """Test translation operation."""
     # Lazy import to avoid circular dependency
-    from run import _mk_change, _apply_changes_list
+    from run import _mk_change
+    from app.services.state_service import apply_changes_list as _apply_changes_list
     
     data = request.get_json(silent=True) or {}
     target = (data.get("target") or "wheel").lower()
@@ -53,7 +55,8 @@ def test_translate():
 def test_modify():
     """Test modify operation."""
     # Lazy import to avoid circular dependency
-    from run import _mk_change, _apply_changes_list
+    from run import _mk_change
+    from app.services.state_service import apply_changes_list as _apply_changes_list
     
     data = request.get_json(silent=True) or {}
     target = (data.get("target") or "wheel").lower()

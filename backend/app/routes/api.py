@@ -67,7 +67,8 @@ def state_reset():
 @bp.post("/apply")
 def apply():
     """Apply changes to the CAD model."""
-    from run import _parse_apply_request, _apply_changes_list
+    from run import _parse_apply_request
+    from app.services.state_service import apply_changes_list as _apply_changes_list
     try:
         changes, excerpt = _parse_apply_request()
         if not changes:
@@ -83,12 +84,14 @@ def apply():
 @bp.get("/mode")
 def mode():
     """Get current mode."""
-    from run import USE_CQPARTS, ROVER_GLB_PATH
+    from run import USE_CQPARTS
+    from app.config import Config
     import os
+    model_glb = Config.ASSETS_DIR / "model.glb"
     mode = (
-        "GLB: assets/rover.glb"
-        if os.path.exists(ROVER_GLB_PATH)
-        else ("cqparts" if USE_CQPARTS else "fallback")
+        "model.glb"
+        if os.path.exists(model_glb)
+        else ("cqparts" if USE_CQPARTS else "no_model")
     )
     return jsonify({"mode": mode})
 
@@ -119,57 +122,29 @@ def labels():
 def model_glb():
     """Get current GLB model file."""
     from flask import send_file, Response
-    from run import ROVER_GLB_PATH, BASE_DIR, _reload_rover_from_generated, Rover, build_rover_scene_glb_cqparts, build_rover_scene_glb_cqparts_hybrid
+    from app.config import Config
+    from app.services.cad_service import get_glb_path
     import io
     
-    # First, check if cached GLB exists
-    if os.path.exists(ROVER_GLB_PATH):
+    # Check if model GLB exists
+    glb_path = get_glb_path()
+    if os.path.exists(glb_path):
         try:
-            with open(ROVER_GLB_PATH, "rb") as f:
+            with open(glb_path, "rb") as f:
                 cached_glb = f.read()
             if len(cached_glb) > 1000:
-                print(f"[model.glb] ✓ Serving cached GLB ({len(cached_glb)} bytes) - NO BUILD", flush=True)
+                print(f"[model.glb] ✓ Serving GLB ({len(cached_glb)} bytes)", flush=True)
                 return send_file(io.BytesIO(cached_glb), mimetype="model/gltf-binary")
         except Exception as e:
-            print(f"[model.glb] Failed to read cached GLB: {e}", flush=True)
+            print(f"[model.glb] Failed to read GLB: {e}", flush=True)
     
-    # Check if explicit request
-    explicit_request = (
-        request.args.get('force_rebuild') == '1' or
-        request.args.get('use_generated') == '1' or
-        (request.referrer and '/viewer' in request.referrer)
+    # No model loaded yet
+    print("[model.glb] ⚠ No model GLB found - returning 404", flush=True)
+    return Response(
+        "Model not yet loaded. Please upload a mesh or CadQuery model first.",
+        status=404,
+        mimetype="text/plain"
     )
-    
-    if not explicit_request:
-        print("[model.glb] ⚠ No cached GLB and not an explicit request - returning 404", flush=True)
-        return Response(
-            "Model not yet loaded. Please upload a mesh or parametric model first, or use the 'Load Model' button.",
-            status=404,
-            mimetype="text/plain"
-        )
-    
-    # Build GLB (simplified - full logic in cad_service.py)
-    try:
-        gen_path = os.path.join(BASE_DIR, "generated", "robot_base_vlm.py")
-        use_generated = request.args.get('use_generated') == '1' or os.path.exists(gen_path)
-        
-        if use_generated and os.path.exists(gen_path):
-            RoverClass = _reload_rover_from_generated()
-        else:
-            RoverClass = Rover
-        
-        glb = build_rover_scene_glb_cqparts(RoverClass=RoverClass)
-        
-        with open(ROVER_GLB_PATH, "wb") as f:
-            f.write(glb)
-        print(f"[model.glb] ✓ Saved GLB to {ROVER_GLB_PATH} ({len(glb)} bytes)", flush=True)
-        
-        return send_file(io.BytesIO(glb), mimetype="model/gltf-binary")
-    except Exception as e:
-        import traceback
-        error_msg = f"model.glb build failed:\n{traceback.format_exc()}"
-        print(f"[model.glb] FATAL ERROR: {error_msg}", flush=True)
-        return Response(error_msg, status=500, mimetype="text/plain")
 
 
 @bp.post("/undo")
@@ -207,14 +182,9 @@ def redo():
 @bp.get("/params")
 def params():
     """Get current parameters."""
-    from run import CURRENT_PARAMS, _snapshot, USE_CQPARTS, _ThisWheel, _PanTilt, _introspect_params_from_cls, CONTEXT
+    from run import CURRENT_PARAMS, _snapshot, USE_CQPARTS, _introspect_params_from_cls, CONTEXT
     info = {"current": _snapshot(), "introspected": {}}
-    if USE_CQPARTS:
-        try:
-            info["introspected"]["wheel"] = _introspect_params_from_cls(_ThisWheel)
-            info["introspected"]["pan_tilt"] = _introspect_params_from_cls(_PanTilt)
-        except Exception:
-            pass
+    # Legacy rover component introspection removed
     info["context"] = {"terrain_mode": CONTEXT["terrain_mode"]}
     return jsonify({"ok": True, "params": info})
 

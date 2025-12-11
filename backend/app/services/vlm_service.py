@@ -16,6 +16,139 @@ from pathlib import Path
 from app.services.vlm.prompts_loader import get_system_prompt, get_codegen_prompt
 
 
+def build_codegen_prompt(
+    ref_url: Optional[str], snapshot_url: Optional[str], user_text: str = ""
+) -> tuple[str, List[str]]:
+    """
+    Build the complete prompt for VLM code generation.
+    
+    Args:
+        ref_url: Reference image (target design)
+        snapshot_url: Current CAD screenshot (orthogonal views)
+        user_text: Human qualitative feedback/intent
+    
+    Returns:
+        (prompt_text, list_of_image_urls)
+    """
+    # Import here to avoid circular imports
+    from app.services.state_service import cad_state_json as _cad_state_json
+    from run import _baseline_cqparts_source
+    
+    cad_state = _cad_state_json()
+    baseline_src = _baseline_cqparts_source()
+
+    parts = [
+        get_codegen_prompt(),
+        "\n\n",
+        "=" * 80,
+        "\n<<<BASELINE_PYTHON_SOURCE>>>\n",
+        "# File: robot_base.py\n",
+        "# This is the current implementation - copy exact lines from here\n",
+        "# Look for parameter lines like: wheels_per_side = PositiveFloat(N)\n\n",
+        baseline_src if baseline_src else "# (baseline source unavailable)",
+        "\n<<<END_BASELINE_PYTHON_SOURCE>>>\n",
+        "=" * 80,
+        "\n\n<<<CURRENT_CAD_STATE>>>\n",
+        json.dumps(cad_state, indent=2),
+        "\n<<<END_CURRENT_CAD_STATE>>>\n",
+        "=" * 80,
+    ]
+    
+    if user_text:
+        parts += [
+            "\n\n<<<USER_INTENT_AND_FEEDBACK>>>\n",
+            user_text,
+            "\n<<<END_USER_INTENT>>>\n",
+            "=" * 80,
+        ]
+    
+    parts += [
+        "\n\n=== IMAGES PROVIDED ===",
+        "\n- Image 0: REFERENCE (target design showing desired rover)",
+    ]
+    
+    if snapshot_url:
+        parts.append("\n- Image 1: CURRENT CAD SNAPSHOT (orthogonal views of current model)")
+        parts.append("\n\nCompare these TWO images to understand what needs to change.")
+    else:
+        parts.append("\n\n(No current snapshot - generate from reference image only)")
+    
+    parts += [
+        "\n\n" + "=" * 80,
+        "\n=== NOW OUTPUT THE COMPLETE MODIFIED robot_base.py ===",
+        "\n" + "=" * 80,
+        "\n",
+        "\n🚨 CRITICAL INSTRUCTIONS:",
+        "\n",
+        "\n1. READ the user's instruction carefully - translate it to parameter changes!",
+        "\n   • 'remove all wheels' → wheels_per_side = PositiveFloat(0)",
+        "\n   • '3 wheels per side' → wheels_per_side = PositiveFloat(3)",
+        "\n   • 'more space between wheels' → axle_spacing_mm = PositiveFloat(90) [increase from 70]",
+        "\n   • 'bigger wheels' → diameter = PositiveFloat(100) [increase from 90]",
+        "\n",
+        "\n2. COPY the ENTIRE baseline source above (all 180+ lines)",
+        "\n",
+        "\n3. Modify ONLY the specific parameter VALUE that matches the user request",
+        "\n   • Find the line with that parameter",
+        "\n   • Change ONLY the number inside PositiveFloat(...)",
+        "\n   • Keep everything else identical",
+        "\n",
+        "\n4. DO NOT just copy the baseline unchanged - YOU MUST MAKE THE CHANGE!",
+        "\n   • If user says 'remove all wheels', wheels_per_side MUST be 0, not 4",
+        "\n   • If user says 'increase spacing', axle_spacing_mm MUST be larger, not the same",
+        "\n",
+        "\n5. Keep ALL method implementations identical (make_components, make_constraints, etc.)",
+        "\n",
+        "\n⚠️ OUTPUT REQUIREMENTS:",
+        "\n• NO markdown fences (```python or ```) - output raw Python only",
+        "\n• NO explanations like 'Here is the modified code'",
+        "\n• Start with: #!/usr/bin/env python3",
+        "\n• Copy every import, every class, every method from baseline",
+        "\n• Your output should be 150-250 lines (same length as baseline)",
+        "\n• DO NOT use '...' or abbreviate any methods",
+        "\n",
+        "\n✅ Example 1 - User says 'remove all wheels':",
+        "\n• Translate: 'remove all wheels' means wheels_per_side = 0",
+        "\n• Find line: wheels_per_side = PositiveFloat(4)  # default 4 per side",
+        "\n• Change to: wheels_per_side = PositiveFloat(0)  # no wheels",
+        "\n• Copy everything else EXACTLY",
+        "\n• Result: 180 lines with ONE number changed from 4 to 0",
+        "\n",
+        "\n✅ Example 2 - User says 'increase spacing between wheels':",
+        "\n• Translate: 'increase spacing' means axle_spacing_mm should be larger",
+        "\n• Find line: axle_spacing_mm = PositiveFloat(70)",
+        "\n• Change to: axle_spacing_mm = PositiveFloat(90)  # increased by ~30%",
+        "\n• Copy everything else EXACTLY",
+        "\n",
+        "\n✅ Example 3 - User says 'make diameter 15mm smaller':",
+        "\n• Step 1: Find baseline diameter in ThisWheel class: diameter = PositiveFloat(90)",
+        "\n• Step 2: Calculate: 90 - 15 = 75",
+        "\n• Step 3: Change to: diameter = PositiveFloat(75)  # 15mm smaller than 90mm",
+        "\n• Copy everything else EXACTLY",
+        "\n",
+        "\n❌ WRONG - Do NOT do:",
+        '\n• Output ```python at start',
+        "\n• Abbreviate methods with '# ... rest of code'",
+        "\n• Return single object from make_components (must return dict)",
+        "\n• Change parameters that user didn't request",
+        "\n• Modify imports or method logic",
+        "\n",
+        "\n⚠️ Your output will be compiled and validated. It must be syntactically perfect.",
+        "\n",
+        "\nSTART YOUR PYTHON CODE NOW (begin with #!/usr/bin/env python3, no fences):",
+        "\n",
+    ]
+    
+    images = [u for u in [ref_url, snapshot_url] if u]
+    
+    # Debug logging
+    print(f"[codegen_prompt] Built prompt with {len(images)} images")
+    print(f"[codegen_prompt] Total prompt length: {len(''.join(parts))} chars")
+    print(f"[codegen_prompt] Baseline source included: {len(baseline_src)} chars")
+    
+    return "".join(parts), images
+
+
 # VLM Configuration
 USE_FINETUNED_MODEL = os.environ.get("USE_FINETUNED_MODEL", "1") == "1"
 BACKEND_DIR = Path(__file__).parent.parent.parent

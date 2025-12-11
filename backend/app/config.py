@@ -38,4 +38,34 @@ class Config:
     
     # Ensure assets directory exists
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Application aliases
+    TARGET_ALIASES = {
+        "motor_controllerboard": "motor_controller_board",
+        "motorcontrollerboard": "motor_controller_board",
+        "motor controller board": "motor_controller_board",
+        "motorcontroller": "motor_controller",
+        "motor": "motor_controller",
+        "sensorsbase": "sensor_fork",
+        "sensor": "sensor_fork",
+        "sensors": "sensor_fork",
+        "wheels": "wheel",
+        "roverbase": "rover",
+        "chassis": "rover",
+        "base": "rover",
+    }
+    
+    ACTION_ALIASES = {
+        "move": "translate",
+        "position": "translate",
+        "pos": "translate",
+        "orientation": "rotate",
+        "orient": "rotate",
+        "size": "modify",
+        "count": "add",
+        "wheels_per_side": "modify",
+        "scale": "resize",
+        "shrink": "resize",
+    }
+
 

@@ -98,15 +98,15 @@ def get_state(which: str = "all") -> Dict[str, Any]:
     # Import from run.py to access global state
     from run import (
         CURRENT_PARAMS, CONTEXT, HISTORY, H_PTR, INIT_SNAPSHOT,
-        PENDING_ADDS, STATE, _snapshot, _ensure_initial_history
+        PENDING_ADDS, STATE
     )
     from app.core.component_registry import COMPONENT_REGISTRY
     
-    _ensure_initial_history()
+    ensure_initial_history_global()
     
     payload = {
-        "initial": HISTORY[0] if HISTORY else INIT_SNAPSHOT or _snapshot(),
-        "current": _snapshot(),
+        "initial": HISTORY[0] if HISTORY else INIT_SNAPSHOT or snapshot_global(),
+        "current": snapshot_global(),
         "context": CONTEXT,
         "known_classes": sorted(list(COMPONENT_REGISTRY.keys())),
         "history": HISTORY[: H_PTR + 1],
@@ -123,7 +123,7 @@ def reset_state() -> Dict[str, Any]:
     # Import from run.py to access global state
     from run import (
         CURRENT_PARAMS, CONTEXT, HISTORY, H_PTR, INIT_SNAPSHOT,
-        PENDING_ADDS, STATE, _snapshot
+        PENDING_ADDS, STATE
     )
     
     for k in list(CURRENT_PARAMS.keys()):
@@ -143,9 +143,25 @@ def reset_state() -> Dict[str, Any]:
     
     return {
         "ok": True,
-        "current": _snapshot(),
+        "current": snapshot_global(),
         "history_len": len(HISTORY),
         "pending_adds_len": len(PENDING_ADDS),
+    }
+
+
+def cad_state_json() -> Dict[str, Any]:
+    """Get current CAD state as JSON."""
+    from run import (
+        CURRENT_PARAMS, CONTEXT, HISTORY, H_PTR, STATE, 
+        PENDING_ADDS, COMPONENT_REGISTRY
+    )
+    return {
+        "current_params": snapshot(CURRENT_PARAMS),
+        "context": CONTEXT,
+        "known_classes": sorted(list(COMPONENT_REGISTRY.keys())),
+        "selected_parts": list(STATE.get("selected_parts", [])),
+        "history": HISTORY[: H_PTR + 1],
+        "pending_adds": list(PENDING_ADDS),
     }
 
 
@@ -153,11 +169,139 @@ def apply_changes(changes: List[dict], excerpt: Optional[str] = None) -> tuple[i
     """
     Apply a list of changes to the CAD model.
     
-    This function wraps the _apply_changes_list function from run.py.
-    Eventually this logic will be fully moved to state_service.
+    This is a wrapper that calls apply_changes_list (the full implementation).
     
     Returns:
         Tuple of (status_code, response_dict)
     """
-    from run import _apply_changes_list
-    return _apply_changes_list(changes, excerpt)
+    return apply_changes_list(changes, excerpt)
+
+
+def apply_changes_list(changes: List[dict], excerpt: Optional[str] = None) -> tuple[int, Dict[str, Any]]:
+    """
+    Apply a list of changes to the CAD model.
+    This is the full implementation that accesses globals from run.py.
+    
+    Returns:
+        Tuple of (status_code, response_dict)
+    """
+    from run import (
+        CURRENT_PARAMS, CONTEXT, HISTORY, H_PTR, PENDING_ADDS, STATE,
+        HIDDEN_PREFIXES, Rover, _Stepper, _Electronics, _PanTilt, _ThisWheel,
+        _rebuild_and_save_glb,
+        _normalize_change
+    )
+    from app.core.component_registry import get_component_spec
+    from app.utils.param_normalization import normalize_change
+    
+    if not changes:
+        return 400, {"ok": False, "error": "No change objects supplied"}
+
+    ensure_initial_history_global()
+    push_history_global()
+
+    rv = Rover(
+        stepper=_Stepper, electronics=_Electronics, sensors=_PanTilt, wheel=_ThisWheel
+    )
+    highlight_key = None
+
+    for raw in changes:
+        ch = normalize_change(raw) or raw
+        action = (ch.get("action") or "").strip().lower()
+        target = (ch.get("target_component") or "").strip().lower()
+        params = ch.get("parameters") or {}
+        if not action or not target:
+            print(f"[apply] skipping malformed change: {ch}")
+            continue
+
+        comp = get_component_spec(target) or (
+            get_component_spec(target.split()[0]) if target.split() else None
+        )
+
+        # wheel add count → wheels_per_side
+        if action == "add" and (
+            target.startswith("wheel") or comp is get_component_spec("wheel")
+        ):
+            cnt = params.get("count")
+            if params.get("wheels_per_side") is None and cnt is not None:
+                try:
+                    params["wheels_per_side"] = max(1, (int(cnt) + 1) // 2)
+                except Exception:
+                    pass
+
+        # param map to class attrs
+        if comp and action in (
+            "modify",
+            "resize",
+            "replace",
+            "translate",
+            "rotate",
+            "add",
+        ):
+            for jkey, attr in (comp.param_map or {}).items():
+                if jkey in params and params[jkey] is not None:
+                    try:
+                        setattr(comp.cls, attr, float(params[jkey]))
+                    except Exception:
+                        pass
+
+        # apply non-geom context first (wheel attach mode, LR mirror)
+        wa = params.get("wheel_attach")
+        if isinstance(wa, str) and wa:
+            CONTEXT["wheel_attach"] = (
+                "center" if "center" in wa or "mid" in wa else "bottom"
+            )
+        if "mirror_lr" in params and params["mirror_lr"] is not None:
+            CURRENT_PARAMS["mirror_lr"] = bool(params["mirror_lr"])
+
+        # true add
+        if action == "add" and comp and callable(comp.add_fn):
+            from app.core.component_registry import ModelAdapter
+            adapter = ModelAdapter(Rover)
+            comp.add_fn(adapter=adapter, **params)
+
+        # apply model-level params
+        apply_params_to_rover(rv, params)
+
+        # rover rotate convenience
+        if (action == "rotate" or "rover_yaw_deg" in params) and target in (
+            "rover",
+            "base",
+            "chassis",
+        ):
+            yaw = (
+                params.get("rover_yaw_deg")
+                or params.get("rz")
+                or params.get("angle")
+                or params.get("angle_deg")
+            )
+            if yaw is not None:
+                try:
+                    CURRENT_PARAMS["rover_yaw_deg"] = float(yaw)
+                except Exception:
+                    pass
+
+        # delete/hide unified semantics
+        if action == "delete":
+            t = target
+            if t in ("wheel", "wheels"):
+                CURRENT_PARAMS["hide_wheels"] = True
+                HIDDEN_PREFIXES.append("wheel/")
+            elif t in ("pan_tilt", "pan-tilt", "pantilt"):
+                HIDDEN_PREFIXES.extend(["pan_tilt", "pan-tilt"])
+            elif t in ("sensor_fork", "sensor", "sensors"):
+                HIDDEN_PREFIXES.append("sensor_fork")
+
+        if not highlight_key:
+            highlight_key = target
+
+    push_history_global()
+    try:
+        _rebuild_and_save_glb()
+        return 200, {
+            "ok": True,
+            "highlight_key": highlight_key or "wheel",
+            "excerpt": excerpt,
+        }
+    except Exception as e:
+        return 500, {"ok": False, "error": str(e)}

@@ -77,7 +77,9 @@ def normalize_params(target: str, action: str, params: dict) -> dict:
         return s in ("1", "true", "yes", "on", "y")
 
     # Aliases (imported from run.py)
-    from run import TARGET_ALIASES, ACTION_ALIASES
+    from app.config import Config
+    TARGET_ALIASES = Config.TARGET_ALIASES
+    ACTION_ALIASES = Config.ACTION_ALIASES
     tgt = TARGET_ALIASES.get(tgt, tgt)
     action = ACTION_ALIASES.get(action, action)
 
