@@ -139,9 +139,8 @@ class FinetunedVLMClient:
                 "Make sure you're running from the correct directory."
             )
         
-        # Ensure model is loaded
-        if self._load_finetuned_model:
-            self._load_finetuned_model()
+        # Ensure model is loaded (call_vlm will handle lazy loading if needed)
+        # Don't call load_finetuned_model here - it's already loaded or will be loaded by call_vlm
         
         # Convert messages to prompt
         prompt = self._messages_to_prompt(messages)

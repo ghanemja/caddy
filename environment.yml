@@ -1,0 +1,34 @@
+name: vlm_optimizer
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - pillow
+  - requests
+  - flask
+  - jinja2
+  - freecad
+  - pip
+  # PyTorch - install CPU version by default
+  # For CUDA support, after creating env, run:
+  # conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+  - pytorch::pytorch
+  - pytorch::torchvision
+  - pytorch::torchaudio
+  - pip:
+    - cadquery>=2.4.0
+    - trimesh
+    - transformers>=4.45.0
+    - peft>=0.17.0
+    - accelerate>=0.34.0
+    - safetensors
+    - sentencepiece
+    - six
+    - tinydb
+    - rectpack
+    - anytree
+

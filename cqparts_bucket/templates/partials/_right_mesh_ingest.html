@@ -1,25 +1,43 @@
-<div class="section" id="meshIngestSection">
+<div class="section" id="meshIngestSection" data-step="2">
   <header>
-    <h3>Mesh Ingestion</h3>
+    <h3>2. Upload Starting Mesh</h3>
     <button class="toggle" data-target="meshIngestSection">Collapse</button>
   </header>
   <div class="section-body">
     <p style="font-size: 12px; color: #64748b; margin-bottom: 12px;">
-      Upload a 3D mesh (OBJ/STL/PLY) to extract semantic parameters using PointNet++ and VLM.
+      Upload a 3D mesh (OBJ/STL/PLY) or CadQuery file (.py) to extract semantic parameters. Step 1: Segmentation, Step 2: Label parts, Step 3: VLM analysis.
     </p>
-    <div class="row">
-      <input id="meshFile" type="file" accept=".obj,.stl,.ply" />
-      <button id="clearMesh">Clear</button>
+    <div class="row" style="margin-bottom: 8px;">
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer;">
+        <input type="checkbox" id="isCadQueryFile" style="cursor: pointer;" />
+        <span>CadQuery file (.py)</span>
+      </label>
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; margin-left: 12px;">
+        <input type="checkbox" id="isCADFile" checked style="cursor: pointer;" />
+        <span>CAD/Mesh file (.obj/.stl/.ply)</span>
+      </label>
+    </div>
+    <div class="row" style="flex-direction: column; gap: 8px;">
+      <label class="file-input-wrapper">
+        <input id="meshFile" type="file" accept=".obj,.stl,.ply,.py" style="display: none;" />
+        <span class="file-input-button">Choose Mesh File</span>
+        <span class="file-input-name" id="meshFileName">No file chosen</span>
+      </label>
+      <button id="clearMesh" style="align-self: flex-start; padding: 6px 12px; background: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; font-size: 12px;">Clear</button>
+    </div>
+    <div class="row" style="margin-top: 8px;">
+      <button id="loadDemoSTL" style="width: 100%; padding: 6px; background: #5f476e; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Load Demo STL</button>
     </div>
     <div class="row">
-      <button id="ingestMesh" style="width: 100%; margin-top: 8px;">Analyze Mesh</button>
+      <button id="ingestMesh" style="width: 100%; margin-top: 8px; padding: 10px; background: #5f476e; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">Segment Mesh</button>
     </div>
     <div id="meshIngestStatus" style="font-size: 12px; color: #64748b; margin-top: 8px;"></div>
-    <div id="meshIngestResults" style="margin-top: 12px; display: none;">
-      <h4 style="font-size: 14px; margin-bottom: 8px;">Results</h4>
-      <div id="meshCategory" style="font-weight: bold; margin-bottom: 8px;"></div>
-      <div id="meshParameters" style="font-size: 12px;"></div>
-    </div>
+    
+    <!-- Proceed button -->
+    <button id="proceedToStep3" class="proceed-button" style="width: 100%; margin-top: 16px; padding: 12px; background: #5f476e; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; display: none;">
+      Proceed to Step 3 →
+    </button>
+    
+    <!-- Part Labeling UI moved to Step 3: Confirm Parameters section -->
   </div>
 </div>
-

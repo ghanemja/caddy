@@ -1,0 +1,82 @@
+<div class="section" id="iterateShapeSection" data-step="4">
+  <header>
+    <h3>4. Iterate on Your Shape</h3>
+    <button class="toggle" data-target="iterateShapeSection">Collapse</button>
+  </header>
+  <div class="section-body">
+    <p style="font-size: 12px; color: #64748b; margin-bottom: 12px;">
+      Modify your shape by adjusting parameter values directly or using natural language instructions.
+    </p>
+    
+    <!-- Mode selection: Direct Parameters vs Natural Language -->
+    <div style="margin-bottom: 16px; padding: 12px; background: #f3ebf7; border-radius: 6px; border: 1px solid #5f476e;">
+      <div style="font-size: 12px; font-weight: 600; color: #5f476e; margin-bottom: 8px;">Modification Mode:</div>
+      <div style="display: flex; gap: 12px;">
+        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;">
+          <input type="radio" name="modifyMode" value="direct" id="modifyModeDirect" checked style="cursor: pointer;" />
+          <span>Direct Parameter Values</span>
+        </label>
+        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px;">
+          <input type="radio" name="modifyMode" value="natural" id="modifyModeNatural" style="cursor: pointer;" />
+          <span>Natural Language</span>
+        </label>
+      </div>
+    </div>
+    
+    <!-- Direct Parameter Modification (default) -->
+    <div id="directParamsMode" style="display: block;">
+      <h4 style="font-size: 14px; margin-bottom: 8px; font-weight: 600;">Parameter Values (meters)</h4>
+      <p style="font-size: 11px; color: #64748b; margin-bottom: 12px;">
+        Adjust parameter values directly. Parts will be scaled according to these values.
+      </p>
+      
+      <div id="directParamsList" style="margin-bottom: 12px;">
+        <!-- Parameters will be populated here dynamically -->
+        <div style="font-size: 12px; color: #94a3b8; font-style: italic; text-align: center; padding: 20px;">
+          Complete Step 3 to see parameters here.
+        </div>
+      </div>
+      
+      <button id="applyDirectParams" style="width: 100%; padding: 12px; background: #5f476e; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; display: none;">
+        Apply Parameter Changes
+      </button>
+    </div>
+    
+    <!-- Natural Language Mode -->
+    <div id="naturalLanguageMode" style="display: none;">
+      <h4 style="font-size: 14px; margin-bottom: 8px; font-weight: 600;">Natural Language Instructions</h4>
+      <p style="font-size: 11px; color: #64748b; margin-bottom: 12px;">
+        Describe what you want to change in natural language.
+      </p>
+      
+      <textarea
+        id="prompt"
+        placeholder="Describe what you want (e.g., 'Make the wingspan 2.5 meters, increase seat height to 0.8 meters')"
+        style="width: 100%; min-height: 80px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; resize: vertical; font-size: 12px; font-family: inherit; margin-bottom: 12px;"
+      ></textarea>
+      
+      <button id="btn-codegen" style="width: 100%; padding: 12px; background: #5f476e; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
+        Generate Code
+      </button>
+      
+      <div id="codegenStatus" style="margin-top: 8px; font-size: 11px; color: #64748b; opacity: 0.8;"></div>
+    </div>
+    
+    <!-- Generated code display area -->
+    <div id="codegenOutput" style="display: none; margin-top: 16px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px">
+        <label style="font-weight: 600; font-size: 13px">Generated Code:</label>
+        <button id="copyCode" style="padding: 4px 8px; font-size: 11px">Copy</button>
+      </div>
+      <textarea 
+        id="codegenText" 
+        readonly 
+        style="width: 100%; height: 200px; font-family: monospace; font-size: 11px; resize: vertical; background: #f8fafc; border: 1px solid #cbd5e1; padding: 8px; border-radius: 4px"
+      ></textarea>
+      <div style="font-size: 11px; color: #64748b; margin-top: 4px">
+        Code saved to: <code style="background: #f1f5f9; padding: 2px 4px; border-radius: 2px">generated/robot_base_vlm.py</code>
+      </div>
+    </div>
+  </div>
+</div>
+

@@ -1,0 +1,45 @@
+<div class="section" id="confirmParamsSection" data-step="3">
+  <header>
+    <h3>3. Confirm Parameters</h3>
+    <button class="toggle" data-target="confirmParamsSection">Collapse</button>
+  </header>
+  <div class="section-body">
+    <p style="font-size: 12px; color: #64748b; margin-bottom: 12px;">
+      Label parts with semantic names and review extracted parameters. These will be used for shape iteration.
+    </p>
+    
+    <!-- Part Labeling UI (shown after segmentation) -->
+    <div id="partLabelingSection" style="margin-top: 16px; display: none;">
+      <h4 style="font-size: 14px; margin-bottom: 8px; font-weight: 600;">Label Parts</h4>
+      <p style="font-size: 11px; color: #64748b; margin-bottom: 8px;">
+        Assign semantic names to each part (e.g., "backrest", "seat", "wheel"). Each part is shown with its ID and shape hint.
+      </p>
+      
+      <!-- Part visualization/IDs display -->
+      <div id="partVisualization" style="margin-bottom: 12px; padding: 8px; background: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0;">
+        <div style="font-size: 11px; color: #64748b; margin-bottom: 6px;">
+          <strong>Part IDs:</strong> Each part has a unique ID shown below. Use these IDs to identify parts in the 3D viewer.
+        </div>
+        <div id="partIdsDisplay" style="font-size: 11px; color: #475569; font-family: monospace;"></div>
+      </div>
+      
+      <div id="partLabelingList" style="max-height: 300px; overflow-y: auto; margin-bottom: 12px; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px;"></div>
+      <button id="submitLabels" style="width: 100%; margin-top: 8px; padding: 10px; background: #5f476e; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">Submit Labels & Run VLM Analysis</button>
+    </div>
+    
+    <!-- Parameters display (shown after VLM analysis) -->
+    <div id="confirmParamsContent" style="display: none; margin-top: 16px;">
+      <h4 style="font-size: 14px; margin-bottom: 8px; font-weight: 600;">Extracted Parameters</h4>
+      <div id="confirmParamsCategory" style="font-weight: bold; margin-bottom: 8px; font-size: 14px;"></div>
+      <div id="confirmParamsList" style="font-size: 12px; margin-bottom: 12px;"></div>
+      <button id="confirmParamsBtn" class="proceed-button" style="width: 100%; padding: 12px; background: #5f476e; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
+        Proceed to Step 4 →
+      </button>
+    </div>
+    
+    <div id="confirmParamsEmpty" style="font-size: 12px; color: #94a3b8; font-style: italic; text-align: center; padding: 20px;">
+      Complete Step 2 (segment mesh) to label parts here.
+    </div>
+  </div>
+</div>
+

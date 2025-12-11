@@ -1,46 +1,44 @@
 <!-- _gen.html -->
-<div class="section" id="codegen">
+<div class="section" id="codegen" data-step="1">
   <header>
-    <h3>🤖 Generate Code from Image</h3>
+    <h3>1. Upload Image</h3>
     <button class="toggle" data-target="codegen">Collapse</button>
   </header>
   <div class="section-body">
-    <div style="font-size: 11px; color: #64748b; margin-bottom: 12px; padding: 8px; background: #f8fafc; border-radius: 6px; border-left: 3px solid #3b82f6">
+      <div style="font-size: 11px; color: #5f476e; margin-bottom: 12px; padding: 8px; background: #f3ebf7; border-radius: 6px; border-left: 3px solid #5f476e">
       <strong>What this does:</strong> Upload a reference image and generate/modify Python code to match it. The code will be saved and the 3D model will update.
     </div>
     
-    <div class="row" style="justify-content: space-between; margin-bottom: 8px">
-      <div id="codegenStatus" class="pill" style="opacity: 0.8">Ready</div>
-    </div>
+    <!-- Status moved to canvas overlay -->
     
     <div class="stack" style="margin-top: 12px">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px">
-        <label><strong>Reference Image</strong> (required)</label>
-        <button id="loadDemo" style="padding: 4px 8px; font-size: 11px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer">Load Demo</button>
+        <label><strong>Image</strong> (required)</label>
+        <button id="loadDemo" style="padding: 4px 8px; font-size: 11px; background: #5f476e; color: white; border: none; border-radius: 4px; cursor: pointer">Load Demo</button>
       </div>
-      <input id="ref" type="file" accept="image/*" />
+      <label class="file-input-wrapper">
+        <input id="ref" type="file" accept="image/*" style="display: none;" />
+        <span class="file-input-button">Choose Image File</span>
+        <span class="file-input-name" id="refFileName">No file chosen</span>
+      </label>
       <div id="demoPreview" style="margin-top: 8px; display: none">
         <img id="demoImg" src="" alt="Demo preview" style="max-width: 100%; max-height: 150px; border: 1px solid #cbd5e1; border-radius: 4px" />
         <div style="font-size: 11px; color: #64748b; margin-top: 4px">Demo image loaded: Mars Rover</div>
       </div>
     </div>
 
-    <div class="stack" style="margin-top: 8px; padding: 8px; background: #f0f9ff; border-radius: 6px; border-left: 3px solid #0ea5e9">
+    <div class="stack" style="margin-top: 8px; padding: 8px; background: #f3ebf7; border-radius: 6px; border-left: 3px solid #5f476e">
       <div style="font-size: 11px; color: #0369a1">
-        <strong>✓ Current model snapshot</strong> will be captured automatically from the 3D viewer when you click "Generate Code"
+        <strong>Current model snapshot</strong> will be captured automatically from the 3D viewer when you click "Generate Code"
       </div>
     </div>
+    
+    <!-- Proceed button -->
+    <button id="proceedToStep2" class="proceed-button" style="width: 100%; margin-top: 16px; padding: 12px; background: #5f476e; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; display: none;">
+      Proceed to Step 2 →
+    </button>
 
-    <div class="stack" style="margin-top: 12px">
-      <label><strong>Instructions</strong> (optional)</label>
-      <textarea
-        id="prompt"
-        placeholder="Describe what you want (e.g., 'Add 6 wheels total, 3 per side like in the image')"
-        style="width: 100%; min-height: 80px; padding: 8px; border: 1px solid #e5e7eb; border-radius: 8px; resize: vertical; font-size: 12px"
-      ></textarea>
-    </div>
-
-    <button id="btn-codegen" style="margin-top: 12px; width: 100%; text-align: center; padding: 10px; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600" class="btn">🚀 Generate Code</button>
+    <!-- Instructions and Generate Code button moved to canvas overlay -->
     
     <!-- Generated code display area -->
     <div id="codegenOutput" style="display: none; margin-top: 12px">

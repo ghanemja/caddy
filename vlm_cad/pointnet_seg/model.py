@@ -37,24 +37,57 @@ class PointNetSetAbstraction(nn.Module):
             new_xyz: sampled points position data, [B, S, 3]
             new_points_concat: sample points feature data, [B, S, D']
         """
-        xyz = xyz.permute(0, 2, 1)
+        xyz = xyz.permute(0, 2, 1)  # [B, N, 3] -> [B, 3, N]
         if points is not None:
-            points = points.permute(0, 2, 1)
+            points = points.permute(0, 2, 1)  # [B, N, C] -> [B, C, N]
 
         if self.group_all:
-            new_xyz = xyz
-            new_points = torch.cat([xyz, points], dim=1) if points is not None else xyz
+            # For group_all, we aggregate all points into a single point
+            # new_xyz should be the centroid (mean) of all points: [B, 3, 1]
+            new_xyz = torch.mean(xyz, dim=2, keepdim=True)  # [B, 3, N] -> [B, 3, 1]
+            
+            if points is not None:
+                # Concatenate along channel dimension: [B, 3, N] + [B, C, N] -> [B, 3+C, N]
+                # Both tensors must have same N (number of points)
+                if xyz.shape[2] != points.shape[2]:
+                    # If N doesn't match, this is an error - but try to handle gracefully
+                    raise ValueError(
+                        f"Size mismatch in SetAbstraction: xyz has {xyz.shape[2]} points, "
+                        f"but points has {points.shape[2]} points. Shapes: xyz={xyz.shape}, points={points.shape}"
+                    )
+                new_points = torch.cat([xyz, points], dim=1)  # [B, 3+C, N]
+            else:
+                new_points = xyz
+            
+            # For group_all, we need to reshape to 4D for Conv2d: [B, C, N] -> [B, C, 1, N]
+            # This treats all N points as a single group with 1 neighbor each
+            new_points = new_points.unsqueeze(2)  # [B, 3+C, N] -> [B, 3+C, 1, N]
         else:
             new_xyz = index_points(xyz, farthest_point_sample(xyz, self.npoint))
             new_points = sample_and_group(self.radius, self.nsample, xyz, points, new_xyz)
         
-        # MLP
+        # MLP (expects 4D input [B, C, K, S] where K is number of neighbors, S is number of sampled points)
         for i, conv in enumerate(self.mlp_convs):
             bn = self.mlp_bns[i]
             new_points = F.relu(bn(conv(new_points)))
         
-        new_points = torch.max(new_points, 2)[0]
-        new_xyz = new_xyz.permute(0, 2, 1)
+        # Max pooling
+        if self.group_all:
+            # For group_all, we have [B, C, 1, N] and want to pool over N to get [B, C, 1]
+            # Pool over N dimension (dim=3) to get [B, C, 1]
+            new_points = torch.max(new_points, dim=3, keepdim=False)[0]  # [B, C, 1, N] -> [B, C, 1]
+            # Double-check: ensure it's exactly 3D [B, C, 1]
+            while new_points.dim() > 3:
+                new_points = new_points.squeeze(-1)  # Remove trailing dimensions
+            if new_points.dim() == 2:
+                new_points = new_points.unsqueeze(-1)  # Add dimension if 2D
+        else:
+            # For non-group_all, pool over K dimension (neighbors)
+            new_points = torch.max(new_points, 2)[0]  # [B, C, K, S] -> [B, C, S]
+        
+        # For group_all, new_xyz is already [B, 3, 1], so we need to permute to [B, 1, 3]
+        # For non-group_all, new_xyz needs to be permuted from [B, 3, S] to [B, S, 3]
+        new_xyz = new_xyz.permute(0, 2, 1)  # [B, 3, S] -> [B, S, 3] or [B, 3, 1] -> [B, 1, 3]
         return new_xyz, new_points
 
 
@@ -144,12 +177,14 @@ class PointNetFeaturePropagation(nn.Module):
         xyz1 = xyz1.permute(0, 2, 1)
         xyz2 = xyz2.permute(0, 2, 1)
 
-        points2 = points2.permute(0, 2, 1)
+        points2 = points2.permute(0, 2, 1)  # [B, D, S] -> [B, S, D]
         B, N, C = xyz1.shape
         _, S, _ = xyz2.shape
 
         if S == 1:
-            interpolated_points = points2.repeat(1, N, 1)
+            # points2 is [B, 1, D] after permute, we need [B, N, D]
+            # Repeat along the N dimension (dim=1)
+            interpolated_points = points2.repeat(1, N, 1)  # [B, 1, D] -> [B, N, D]
         else:
             dists = square_distance(xyz1, xyz2)
             dists, idx = dists.sort(dim=-1)
@@ -270,6 +305,8 @@ class PointNet2PartSeg(nn.Module):
         self.sa3 = PointNetSetAbstraction(npoint=None, radius=None, nsample=None, in_channel=512 + 3, mlp=[256, 512, 1024], group_all=True)
         self.fp3 = PointNetFeaturePropagation(in_channel=1536, mlp=[256, 256])
         self.fp2 = PointNetFeaturePropagation(in_channel=576, mlp=[256, 128])
+        # fp1 concatenates points1 (22 or 25 channels: cls_label[16] + l0_xyz[3] + l0_points[3 or 6])
+        # with interpolated_points from l1_points (128 channels), so total is 22+128=150 or 25+128=153
         self.fp1 = PointNetFeaturePropagation(in_channel=150+additional_channel, mlp=[128, 128])
         self.conv1 = nn.Conv1d(128, 128, 1)
         self.bn1 = nn.BatchNorm1d(128)
@@ -287,25 +324,54 @@ class PointNet2PartSeg(nn.Module):
         # Set Abstraction layers
         B, N, C = xyz.shape
         if self.normal_channel:
-            l0_points = xyz
+            l0_points_raw = xyz
             l0_xyz = xyz[:, :, 0:3]
         else:
-            l0_points = xyz
+            l0_points_raw = xyz
             l0_xyz = xyz
-        l0_xyz = l0_xyz.permute(0, 2, 1)
-        l0_points = l0_points.permute(0, 2, 1)
+        l0_xyz = l0_xyz.permute(0, 2, 1)  # [B, N, 3] -> [B, 3, N]
+        l0_points = l0_points_raw.permute(0, 2, 1)  # [B, N, C] -> [B, C, N]
+        # Save original l0_points for fp1 (before it gets passed through sa1)
+        l0_points_for_fp1 = l0_points.clone()  # [B, 3, N] or [B, 6, N]
 
-        l1_xyz, l1_points = self.sa1(l0_xyz, l0_points)
-        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
-        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
+        l1_xyz, l1_points = self.sa1(l0_xyz, l0_points)  # l1_xyz: [B, 3, 512], l1_points: [B, 320, 512]
+        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)  # l2_xyz: [B, 3, 128], l2_points: [B, 512, 128]
+        # sa3 expects: xyz [B, N, 3], points [B, N, C] (will permute internally)
+        # But sa2 returns [B, C, N], so we need to permute before passing to sa3
+        l2_xyz_for_sa3 = l2_xyz.permute(0, 2, 1)  # [B, 3, 128] -> [B, 128, 3]
+        l2_points_for_sa3 = l2_points.permute(0, 2, 1)  # [B, 512, 128] -> [B, 128, 512]
+        # sa3 output: xyz [B, 1, 3], points [B, 1024, 1] (after group_all and permute)
+        l3_xyz, l3_points = self.sa3(l2_xyz_for_sa3, l2_points_for_sa3)
+        # sa3 returns [B, 1, 3] but fp3 expects [B, 3, 1], so permute back
+        l3_xyz = l3_xyz.permute(0, 2, 1)  # [B, 1, 3] -> [B, 3, 1]
+        # l3_points is [B, 1024, 1] but fp3 expects [B, 1024, 1] (already correct)
 
         # Feature Propagation layers
-        l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points)
-        l1_points = self.fp2(l1_xyz, l2_xyz, l1_points, l2_points)
+        # fp3 expects: xyz1 [B, 3, 128], xyz2 [B, 3, 1], points1 [B, 512, 128], points2 [B, 1024, 1]
+        l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points)  # [B, 256, 128]
+        l1_points = self.fp2(l1_xyz, l2_xyz, l1_points, l2_points)  # [B, 128, 512]
         
         # Class label embedding (before fp1, as in original)
-        cls_label_one_hot = cls_label.view(B, 16, 1).repeat(1, 1, N)
-        l0_points = self.fp1(l0_xyz, l1_xyz, torch.cat([cls_label_one_hot, l0_xyz, l0_points], 1), l1_points)
+        # fp1 expects: cls_label [16] + l0_xyz [3] + l0_points [3 or 6] = 22 or 25 channels
+        # Then fp1 internally concatenates with interpolated l1_points (128 channels)
+        # giving total: 22+128=150 or 25+128=153 channels
+        cls_label_one_hot = cls_label.view(B, 16, 1).repeat(1, 1, N)  # [B, 16, N]
+        
+        # Use the saved original l0_points (not modified by sa1)
+        # l0_points_for_fp1 is [B, 3, N] or [B, 6, N] (raw input, already permuted)
+        fp1_input = torch.cat([cls_label_one_hot, l0_xyz, l0_points_for_fp1], dim=1)  # [B, 16+3+3/6, N] = [B, 22/25, N]
+        
+        # Debug: verify shapes
+        expected_channels = 22 if not self.normal_channel else 25
+        if fp1_input.shape[1] != expected_channels:
+            raise ValueError(
+                f"fp1 input has wrong number of channels: got {fp1_input.shape[1]}, "
+                f"expected {expected_channels}. Shapes: cls_label={cls_label_one_hot.shape}, "
+                f"l0_xyz={l0_xyz.shape}, l0_points_for_fp1={l0_points_for_fp1.shape}. "
+                f"l0_points_for_fp1 should be [B, 3, N] or [B, 6, N], not expanded!"
+            )
+        
+        l0_points = self.fp1(l0_xyz, l1_xyz, fp1_input, l1_points)
 
         # FC layers
         feat = F.relu(self.bn1(self.conv1(l0_points)))

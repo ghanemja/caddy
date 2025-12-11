@@ -1,1 +1,22 @@
-<div id="wrap"><canvas id="canvas"></canvas></div>
+<div id="wrap">
+  <canvas id="canvas"></canvas>
+  
+  <!-- Instruction bar overlaid at bottom of viewer (for canvas-specific instructions) -->
+  <div id="instructionBar" style="position: absolute; bottom: 0; left: 0; right: 0; width: 100%; background: rgba(255, 255, 255, 0.95); border-top: 1px solid #5f476e; padding: 0.5rem 0.75rem; z-index: 101; box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1); box-sizing: border-box;">
+    <div id="instructionBarContent" style="display: flex; align-items: center; gap: 8px;">
+      <label style="font-size: 12px; font-weight: 600; color: #475569;">Instructions:</label>
+      <textarea
+        id="canvasPrompt"
+        placeholder="Describe what you want to change in the 3D model..."
+        style="flex: 1; min-height: 32px; max-height: 80px; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 6px; resize: vertical; font-size: 12px; font-family: inherit;"
+      ></textarea>
+      <button id="applyCanvasInstructions" style="padding: 6px 12px; background: #5f476e; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;">Apply</button>
+      <button id="minimizeInstructionBar" style="padding: 6px 8px; background: #f1f5f9; color: #64748b; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;">−</button>
+    </div>
+  </div>
+  
+  <!-- Minimized instruction bar (collapsed state) -->
+  <div id="instructionBarMinimized" style="display: none; position: absolute; bottom: 0; left: 0; right: 0; width: 100%; background: rgba(255, 255, 255, 0.95); border-top: 1px solid #5f476e; padding: 0.25rem 0.75rem; z-index: 101; box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1); box-sizing: border-box;">
+    <button id="expandInstructionBar" style="padding: 4px 12px; background: #5f476e; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600;">Show Instructions</button>
+  </div>
+</div>

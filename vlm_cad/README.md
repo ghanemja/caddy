@@ -26,7 +26,7 @@ The required dependencies are already in `requirements.txt`:
 
 ## Quick Start
 
-### 1. PointNet++ Segmentation
+### 1. Part Segmentation (Backend Abstraction)
 
 ```python
 from vlm_cad.pointnet_seg.model import load_pretrained_model

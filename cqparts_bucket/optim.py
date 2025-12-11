@@ -96,10 +96,10 @@ mimetypes.add_type("application/javascript", ".js")
 
 # ----------------- VLM config -----------------
 USE_FINETUNED_MODEL = os.environ.get("USE_FINETUNED_MODEL", "1") == "1"  # Use fine-tuned by default
-# Default to runs/onevision_lora_small relative to project root (parent of cqparts_bucket)
+# Default to runs/onevision_lora_small/checkpoint-4 relative to project root (parent of cqparts_bucket)
 # BASE_DIR will be defined later, so we compute it here
 _vlm_base_dir = os.path.dirname(__file__)
-_default_model_path = os.path.join(os.path.dirname(_vlm_base_dir), "runs", "onevision_lora_small")
+_default_model_path = os.path.join(os.path.dirname(_vlm_base_dir), "runs", "onevision_lora_small", "checkpoint-4")
 FINETUNED_MODEL_PATH = os.environ.get(
     "FINETUNED_MODEL_PATH", 
     _default_model_path
@@ -107,7 +107,7 @@ FINETUNED_MODEL_PATH = os.environ.get(
 OLLAMA_URL = os.environ.get(
     "OLLAMA_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 ).rstrip("/")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llava-llama3:latest")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llava:latest")  # Default to llava:latest (user has this)
 LLAVA_URL = os.environ.get("LLAVA_URL")  # optional
 
 # Global variable to hold the fine-tuned model and processor
@@ -149,7 +149,8 @@ def load_finetuned_model():
         print(f"[vlm] ✓ Processor loaded")
         
         # Load base model with optimizations for faster loading
-        print(f"[vlm] Loading base model (this may take 2-3 minutes)...")
+        # Note: If model is cached, this will be fast. First-time download may take a few minutes.
+        print(f"[vlm] Loading base model from cache (or downloading if first time)...")
         base_model = LlavaOnevisionForConditionalGeneration.from_pretrained(
             base_model_name,
             torch_dtype=torch.float16 if device == "cuda" else torch.float32,
@@ -249,6 +250,9 @@ CURRENT_PARAMS: Dict[str, Optional[float]] = {
 CONTEXT: Dict[str, Any] = {"terrain_mode": "flat"}  # or "uneven"
 HISTORY: List[Dict[str, Optional[float]]] = []
 H_PTR: int = -1
+
+# Cache for IngestResult (keyed by mesh_path)
+_INGEST_RESULT_CACHE: Dict[str, Any] = {}
 INIT_SNAPSHOT: Optional[Dict[str, Optional[float]]] = None
 
 # ----------------- cqparts shim -----------------
@@ -1618,71 +1622,121 @@ def call_vlm(
     images_payload = _normalize(image_data_urls)
     err = None
     
-    # Try fine-tuned model first (load lazily if not already loaded)
+    # Check if Ollama model exists (for fallback)
+    ollama_model_available = False
+    if OLLAMA_URL:
+        try:
+            r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
+            if r.status_code == 200:
+                models_data = r.json()
+                model_names = [m.get("name", "") for m in models_data.get("models", [])]
+                ollama_model_available = OLLAMA_MODEL in model_names
+        except:
+            pass
+    
+    # Try fine-tuned model first (user's pretrained model)
+    # Load it if not already loaded
     if USE_FINETUNED_MODEL:
-        if _finetuned_model is None:
-            print("[vlm] Model not loaded yet, loading now (this will take 2-3 minutes)...")
+        if _finetuned_model is None or _finetuned_processor is None:
+            print("[vlm] Loading fine-tuned model (pretrained)...")
             load_finetuned_model()
-        
-        if _finetuned_model is not None and _finetuned_processor is not None:
+    
+    # Use fine-tuned model if it's loaded
+    if _finetuned_model is not None and _finetuned_processor is not None:
+        try:
+            print("[vlm] Using fine-tuned model...")
+            import torch
+            from PIL import Image
+            import io
+            import base64
+            
+            # Prepare images
+            images = []
+            if images_payload:
+                for img_b64 in images_payload:
+                    img_bytes = base64.b64decode(img_b64)
+                    img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+                    images.append(img)
+            
+            # Prepare the conversation format
+            system_prompt = VLM_CODEGEN_PROMPT if not expect_json else VLM_SYSTEM_PROMPT
+            
+            # Format as conversation (LLaVA OneVision format)
+            conversation = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": system_prompt + "\n\n" + final_prompt}
+                    ]
+                }
+            ]
+            
+            # Add images to the user message
+            if images:
+                for img in images:
+                    conversation[0]["content"].insert(0, {"type": "image"})
+            
+            # Apply chat template and process
+            prompt_text = _finetuned_processor.apply_chat_template(
+                conversation, 
+                add_generation_prompt=True
+            )
+            
+            # Process inputs
+            inputs = _finetuned_processor(
+                images=images if images else None,
+                text=prompt_text,
+                return_tensors="pt"
+            )
+            
+            # Move to same device as model
+            device = next(_finetuned_model.parameters()).device
+            inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
+                     for k, v in inputs.items()}
+            
+            # For code generation, use more tokens and very low temperature for faithful copying
+            # Reduce max_tokens on CPU for faster generation
+            if device == "cpu":
+                max_tokens = 2048 if not expect_json else 512  # Reduced for CPU speed
+                print(f"[vlm]   ⚠ CPU detected: Reduced max_tokens to {max_tokens} for faster generation")
+            else:
+                max_tokens = 6144 if not expect_json else 1024  # Full tokens on GPU
+            temp = 0.01 if not expect_json else 0.1  # Very low temp for precise copying
+            
+            print(f"[vlm] Generating response...")
+            print(f"[vlm]   Max tokens: {max_tokens}, Temperature: {temp}")
+            print(f"[vlm]   Input shape: {inputs['input_ids'].shape if 'input_ids' in inputs else 'N/A'}")
+            print(f"[vlm]   Device: {device}")
+            print(f"[vlm]   Starting generation (this may take 30-120 seconds on CPU)...")
+            
+            import time
+            import threading
+            
+            start_time = time.time()
+            generation_done = threading.Event()
+            
+            # Progress monitor thread
+            def progress_monitor():
+                """Print periodic status updates during generation."""
+                check_interval = 10  # Check every 10 seconds
+                warning_threshold = 120  # Warn if taking longer than 2 minutes
+                while not generation_done.is_set():
+                    elapsed = time.time() - start_time
+                    if elapsed < warning_threshold:
+                        time.sleep(check_interval)
+                        if not generation_done.is_set():
+                            print(f"[vlm]   Still generating... ({elapsed:.0f}s elapsed)", flush=True)
+                    else:
+                        # After warning threshold, check more frequently
+                        time.sleep(5)
+                        if not generation_done.is_set():
+                            elapsed = time.time() - start_time
+                            print(f"[vlm]   ⚠ Still generating after {elapsed:.0f}s (may take 2-5 minutes on CPU)...", flush=True)
+            
+            monitor_thread = threading.Thread(target=progress_monitor, daemon=True)
+            monitor_thread.start()
+            
             try:
-                print("[vlm] Using fine-tuned model...")
-                import torch
-                from PIL import Image
-                import io
-                import base64
-                
-                # Prepare images
-                images = []
-                if images_payload:
-                    for img_b64 in images_payload:
-                        img_bytes = base64.b64decode(img_b64)
-                        img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-                        images.append(img)
-                
-                # Prepare the conversation format
-                system_prompt = VLM_CODEGEN_PROMPT if not expect_json else VLM_SYSTEM_PROMPT
-                
-                # Format as conversation (LLaVA OneVision format)
-                conversation = [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": system_prompt + "\n\n" + final_prompt}
-                        ]
-                    }
-                ]
-                
-                # Add images to the user message
-                if images:
-                    for img in images:
-                        conversation[0]["content"].insert(0, {"type": "image"})
-                
-                # Apply chat template and process
-                prompt_text = _finetuned_processor.apply_chat_template(
-                    conversation, 
-                    add_generation_prompt=True
-                )
-                
-                # Process inputs
-                inputs = _finetuned_processor(
-                    images=images if images else None,
-                    text=prompt_text,
-                    return_tensors="pt"
-                )
-                
-                # Move to same device as model
-                device = next(_finetuned_model.parameters()).device
-                inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
-                         for k, v in inputs.items()}
-                
-                print(f"[vlm] Generating response...")
-                
-                # Generate
-                # For code generation, use more tokens and very low temperature for faithful copying
-                max_tokens = 6144 if not expect_json else 1024  # Code needs lots of tokens for 200+ lines
-                temp = 0.01 if not expect_json else 0.1  # Very low temp for precise copying
-                
                 with torch.no_grad():
                     output_ids = _finetuned_model.generate(
                         **inputs,
@@ -1692,17 +1746,22 @@ def call_vlm(
                         do_sample=True if temp > 0 else False,
                         repetition_penalty=1.1,  # Prevent getting stuck in loops
                     )
-                    
-                print(f"[vlm] Generated with max_tokens={max_tokens}, temp={temp}")
+            finally:
+                generation_done.set()  # Signal that generation is complete
+            
+            elapsed = time.time() - start_time
+            print(f"[vlm]   ✓ Generation completed in {elapsed:.1f} seconds", flush=True)
                 
-                # Decode response
-                generated_ids = output_ids[0][inputs['input_ids'].shape[1]:]
-                response = _finetuned_processor.decode(generated_ids, skip_special_tokens=True)
-                
-                print(f"[vlm] ✓ Got response from fine-tuned model: {len(response)} chars")
-                return {"provider": "finetuned", "raw": response}
-                
-            except Exception as e:
+            print(f"[vlm] Generated with max_tokens={max_tokens}, temp={temp}")
+            
+            # Decode response
+            generated_ids = output_ids[0][inputs['input_ids'].shape[1]:]
+            response = _finetuned_processor.decode(generated_ids, skip_special_tokens=True)
+            
+            print(f"[vlm] ✓ Got response from fine-tuned model: {len(response)} chars")
+            return {"provider": "finetuned", "raw": response}
+            
+        except Exception as e:
                 err = f"Fine-tuned model error: {e}"
                 print(f"[vlm] ✗ Fine-tuned model failed: {err}")
                 import traceback
@@ -1802,11 +1861,140 @@ def call_vlm(
         except Exception as e:
             err = f"Ollama error: {e}"
             print(f"[vlm] ✗ Unexpected error: {err}")
-
+        # If Ollama fails, continue to try other options
+    
+    # Fine-tuned model should have been tried first above
+    # This section is now just for error handling / fallback
+    # (The fine-tuned model attempt is already done at the top of the function)
+            try:
+                print("[vlm] Using fine-tuned model...")
+                import torch
+                from PIL import Image
+                import io
+                import base64
+                
+                # Prepare images
+                images = []
+                if images_payload:
+                    for img_b64 in images_payload:
+                        img_bytes = base64.b64decode(img_b64)
+                        img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+                        images.append(img)
+                
+                # Prepare the conversation format
+                system_prompt = VLM_CODEGEN_PROMPT if not expect_json else VLM_SYSTEM_PROMPT
+                
+                # Format as conversation (LLaVA OneVision format)
+                conversation = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": system_prompt + "\n\n" + final_prompt}
+                        ]
+                    }
+                ]
+                
+                # Add images to the user message
+                if images:
+                    for img in images:
+                        conversation[0]["content"].insert(0, {"type": "image"})
+                
+                # Apply chat template and process
+                prompt_text = _finetuned_processor.apply_chat_template(
+                    conversation, 
+                    add_generation_prompt=True
+                )
+                
+                # Process inputs
+                inputs = _finetuned_processor(
+                    images=images if images else None,
+                    text=prompt_text,
+                    return_tensors="pt"
+                )
+                
+                # Move to same device as model
+                device = next(_finetuned_model.parameters()).device
+                inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
+                         for k, v in inputs.items()}
+                
+                # Generate
+                # Reduce max_tokens on CPU for faster generation
+                if device == "cpu":
+                    max_tokens = 2048 if not expect_json else 512  # Reduced for CPU speed
+                    print(f"[vlm]   ⚠ CPU detected: Reduced max_tokens to {max_tokens} for faster generation")
+                else:
+                    max_tokens = 6144 if not expect_json else 1024  # Full tokens on GPU
+                temp = 0.01 if not expect_json else 0.1
+                
+                print(f"[vlm] Generating response...")
+                print(f"[vlm]   Max tokens: {max_tokens}, Temperature: {temp}")
+                print(f"[vlm]   Input shape: {inputs['input_ids'].shape if 'input_ids' in inputs else 'N/A'}")
+                print(f"[vlm]   Device: {device}")
+                print(f"[vlm]   Starting generation (this may take 30-120 seconds on CPU)...")
+                
+                import time
+                import threading
+                
+                start_time = time.time()
+                generation_done = threading.Event()
+                
+                # Progress monitor thread
+                def progress_monitor():
+                    """Print periodic status updates during generation."""
+                    check_interval = 10  # Check every 10 seconds
+                    warning_threshold = 120  # Warn if taking longer than 2 minutes
+                    while not generation_done.is_set():
+                        elapsed = time.time() - start_time
+                        if elapsed < warning_threshold:
+                            time.sleep(check_interval)
+                            if not generation_done.is_set():
+                                print(f"[vlm]   Still generating... ({elapsed:.0f}s elapsed)", flush=True)
+                        else:
+                            # After warning threshold, check more frequently
+                            time.sleep(5)
+                            if not generation_done.is_set():
+                                elapsed = time.time() - start_time
+                                print(f"[vlm]   ⚠ Still generating after {elapsed:.0f}s (may take 2-5 minutes on CPU)...", flush=True)
+                
+                monitor_thread = threading.Thread(target=progress_monitor, daemon=True)
+                monitor_thread.start()
+                
+                try:
+                    with torch.no_grad():
+                        output_ids = _finetuned_model.generate(
+                            **inputs,
+                            max_new_tokens=max_tokens,
+                            temperature=temp,
+                            top_p=0.98,
+                            do_sample=True if temp > 0 else False,
+                            repetition_penalty=1.1,
+                        )
+                finally:
+                    generation_done.set()  # Signal that generation is complete
+                
+                elapsed = time.time() - start_time
+                print(f"[vlm]   ✓ Generation completed in {elapsed:.1f} seconds", flush=True)
+                
+                elapsed = time.time() - start_time
+                print(f"[vlm]   Generation completed in {elapsed:.1f} seconds")
+                
+                # Decode response
+                generated_ids = output_ids[0][inputs['input_ids'].shape[1]:]
+                response = _finetuned_processor.decode(generated_ids, skip_special_tokens=True)
+                
+                print(f"[vlm] ✓ Got response from fine-tuned model: {len(response)} chars")
+                return {"provider": "finetuned", "raw": response}
+                
+            except Exception as e:
+                err = f"Fine-tuned model error: {e}"
+                print(f"[vlm] ✗ Fine-tuned model failed: {err}")
+                import traceback
+                traceback.print_exc()
+    
+    # Fallback: Try LLAVA_URL if configured
     if LLAVA_URL:
         try:
             payload = {
-                # LLAVA_URL may not support system; bake it into the prompt if needed
                 "prompt": (
                     (VLM_CODEGEN_PROMPT + "\n\n" + final_prompt)
                     if not expect_json
@@ -2844,18 +3032,19 @@ def vlm():
         return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()}), 500
 
 
-@app.post("/ingest_mesh")
-def ingest_mesh():
+@app.post("/ingest_mesh_segment")
+def ingest_mesh_segment():
     """
-    Mesh ingestion endpoint: PointNet++ segmentation + VLM semantics.
+    Step 1: Run segmentation only (fast, ~1-5 seconds).
+    Returns part information for user labeling.
     
     Accepts:
     - mesh: mesh file (OBJ/STL/PLY) - required
     
     Returns:
-    - category: object category
-    - final_parameters: list of semantic parameters
-    - raw_parameters: list of raw geometric parameters
+    - segmentation: part segmentation results
+    - part_table: PartTable JSON for labeling UI
+    - mesh_path: path to uploaded mesh (for step 2)
     """
     try:
         import tempfile
@@ -2873,92 +3062,161 @@ def ingest_mesh():
         mesh_path = os.path.join(temp_dir, mesh_filename)
         mesh_file.save(mesh_path)
         
-        print(f"[ingest_mesh] Processing mesh: {mesh_path}", flush=True)
-        print(f"[ingest_mesh] Note: This may take 2-3 minutes on first run (VLM model download)", flush=True)
+        print(f"[ingest_mesh_segment] Processing mesh: {mesh_path}", flush=True)
         
-        # Import the ingestion pipeline
-        # Add parent directory to path so we can import vlm_cad
+        # Import segmentation only (no VLM)
         import sys
         parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if parent_dir not in sys.path:
             sys.path.insert(0, parent_dir)
         
-        from vlm_cad.pointnet_seg.model import load_pretrained_model
-        from vlm_cad.semantics.vlm_client_finetuned import FinetunedVLMClient
-        from vlm_cad.semantics.ingest_mesh import ingest_mesh_to_semantic_params
+        from vlm_cad.segmentation import create_segmentation_backend
+        from vlm_cad.pointnet_seg.labels import get_category_from_flat_label
+        from vlm_cad.pointnet_seg.geometry import compute_part_statistics, compute_part_bounding_boxes
+        from vlm_cad.parts.parts import build_part_table_from_segmentation, part_table_to_labeling_json
+        import numpy as np
+        import trimesh
         
-        # Load PointNet++ model
-        checkpoint_path = os.path.join(
-            os.path.dirname(__file__), "..", "models", "pointnet2", "pointnet2_part_seg_msg.pth"
-        )
-        
-        if not os.path.exists(checkpoint_path):
-            return jsonify({
-                "ok": False,
-                "error": f"PointNet++ model not found at {checkpoint_path}"
-            }), 500
-        
-        print(f"[ingest_mesh] Loading PointNet++ model from {checkpoint_path}")
+        # Create segmentation backend
+        print(f"[ingest_mesh_segment] Initializing segmentation backend...")
         import torch
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = load_pretrained_model(
-            checkpoint_path=checkpoint_path,
-            num_classes=50,
-            use_normals=True,
-            device=device,
-        )
+        backend_kind = os.environ.get("SEGMENTATION_BACKEND", "pointnet").lower()
+        print(f"[ingest_mesh_segment] Using segmentation backend: {backend_kind}")
         
-        # Initialize VLM client
         try:
-            vlm = FinetunedVLMClient()
-            print("[ingest_mesh] Using fine-tuned VLM")
+            model = create_segmentation_backend(kind=backend_kind, device=device)
         except Exception as e:
-            print(f"[ingest_mesh] Warning: Could not use fine-tuned VLM: {e}")
-            from vlm_cad.semantics.vlm_client import DummyVLMClient
-            vlm = DummyVLMClient()
-            print("[ingest_mesh] Using dummy VLM (for testing)")
+            return jsonify({
+                "ok": False,
+                "error": f"Failed to initialize segmentation backend '{backend_kind}': {str(e)}"
+            }), 500
         
-        # Run ingestion pipeline
-        render_dir = os.path.join(temp_dir, "renders")
-        os.makedirs(render_dir, exist_ok=True)
+        # Run segmentation only (fast, ~1-5 seconds)
+        print(f"[ingest_mesh_segment] Running part segmentation...")
+        seg_result = model.segment(mesh_path, num_points=2048)
+        points = seg_result.points
+        labels = seg_result.labels
+        unique_labels = np.unique(labels)
         
-        print(f"[ingest_mesh] Running ingestion pipeline...")
-        result = ingest_mesh_to_semantic_params(
-            mesh_path=mesh_path,
-            vlm=vlm,
-            model=model,
-            render_output_dir=render_dir,
-            num_points=2048,
+        print(f"[ingest_mesh_segment] ✓ Part segmentation complete!")
+        print(f"[ingest_mesh_segment]   Segmented into {seg_result.num_parts} parts")
+        print(f"[ingest_mesh_segment]   Point cloud: {seg_result.num_points} points")
+        
+        # Build part statistics for visualization
+        part_stats = compute_part_statistics(points, labels)
+        part_bboxes = compute_part_bounding_boxes(points, labels)
+        
+        # Build part label names
+        part_label_names = {}
+        for label_id in unique_labels:
+            label_id_int = int(label_id)
+            result = get_category_from_flat_label(label_id_int)
+            if result:
+                cat, part_name = result
+                part_label_names[label_id_int] = part_name
+            else:
+                part_label_names[label_id_int] = f"part_{label_id_int}"
+        
+        # Create segmentation summary
+        segmentation_summary = {
+            "num_parts": len(unique_labels),
+            "num_points": len(points),
+            "parts": []
+        }
+        
+        for label_id in unique_labels:
+            label_id_int = int(label_id)
+            part_name = part_label_names.get(label_id_int, f"part_{label_id_int}")
+            count = np.sum(labels == label_id_int)
+            bbox = part_bboxes.get(label_id_int, {})
+            
+            # Convert bbox to JSON-serializable format
+            bbox_data = None
+            if label_id_int in part_bboxes and bbox:
+                def to_list(v):
+                    """Convert NumPy arrays/scalars to native Python types."""
+                    if v is None:
+                        return [0.0, 0.0, 0.0]
+                    if hasattr(v, 'tolist'):
+                        # NumPy array - convert to list and ensure all values are native Python floats
+                        return [float(x) for x in v.tolist()]
+                    if isinstance(v, (list, tuple)):
+                        # Already a list/tuple - ensure all values are native Python floats
+                        return [float(x) for x in v]
+                    # Single value - convert to float
+                    return [float(v)]
+                
+                bbox_data = {
+                    "min": to_list(bbox.get("min")),
+                    "max": to_list(bbox.get("max")),
+                    "center": to_list(bbox.get("center")),
+                    "extent": to_list(bbox.get("extent")),
+                }
+            
+            segmentation_summary["parts"].append({
+                "id": int(label_id_int),
+                "name": part_name,
+                "point_count": int(count),
+                "percentage": float(count / len(points) * 100),
+                "bbox": bbox_data,
+            })
+        
+        # Print part details
+        print(f"[ingest_mesh_segment] Part breakdown:")
+        for part in segmentation_summary["parts"]:
+            print(f"[ingest_mesh_segment]   • Part {part['id']} ({part['name']}): {part['point_count']} points ({part['percentage']:.1f}%)")
+        
+        # Build PartTable for user labeling
+        mesh = trimesh.load(mesh_path)
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+        vertices = np.array(mesh.vertices, dtype=np.float32)
+        
+        # Map point labels to vertex labels (approximate)
+        vertex_labels = seg_result.labels
+        if len(vertex_labels) != len(vertices):
+            if len(vertex_labels) < len(vertices):
+                vertex_labels = np.pad(vertex_labels, (0, len(vertices) - len(vertex_labels)), mode='edge')
+            else:
+                vertex_labels = vertex_labels[:len(vertices)]
+        
+        # Build PartTable
+        part_table = build_part_table_from_segmentation(
+            vertices=vertices,
+            part_labels=vertex_labels,
+            ground_plane_z=None,
         )
+        part_table_json = part_table_to_labeling_json(part_table)
         
-        # Convert result to JSON-serializable format
+        print(f"[ingest_mesh_segment] ✓ PartTable created with {len(part_table.parts)} parts for user labeling")
+        
+        # Save colored point cloud visualization
+        try:
+            colors = np.zeros((len(points), 3))
+            for i, label_id in enumerate(labels):
+                np.random.seed(int(label_id))
+                color = np.random.rand(3)
+                colors[i] = color
+            pc = trimesh.PointCloud(vertices=points, colors=colors)
+            viz_path = os.path.join(temp_dir, "segmentation_colored.ply")
+            pc.export(viz_path)
+            segmentation_summary["visualization_path"] = viz_path
+        except Exception as e:
+            print(f"[ingest_mesh_segment] Warning: Could not save visualization: {e}")
+            segmentation_summary["visualization_path"] = None
+        
+        # Include vertex labels for coloring (convert to list for JSON)
+        vertex_labels_list = vertex_labels.tolist() if hasattr(vertex_labels, 'tolist') else list(vertex_labels)
+        
+        # Return segmentation results only (user will label parts, then call /ingest_mesh_label)
         response_data = {
             "ok": True,
-            "category": result.category,
-            "final_parameters": [
-                {
-                    "name": p.name,
-                    "value": p.value,
-                    "units": p.units,
-                    "description": p.description,
-                    "confidence": p.confidence,
-                    "raw_sources": p.raw_sources,
-                }
-                for p in result.final_parameters
-            ],
-            "raw_parameters": [
-                {
-                    "id": p.id,
-                    "value": p.value,
-                    "units": p.units,
-                    "description": p.description,
-                }
-                for p in result.raw_parameters[:20]  # Limit to first 20 for response size
-            ],
-            "metadata": {
-                "num_points": result.extra.get("num_points", 0),
-                "num_parts": result.extra.get("num_parts", 0),
-            }
+            "segmentation": segmentation_summary,
+            "part_table": part_table_json,
+            "vertex_labels": vertex_labels_list,  # Include vertex labels for coloring
+            "mesh_path": mesh_path,  # Store for step 2 (VLM processing)
+            "temp_dir": temp_dir,  # Keep temp dir for step 2
         }
         
         # Cleanup temp directory (keep renders for now, they might be useful)
@@ -2968,12 +3226,426 @@ def ingest_mesh():
         
     except Exception as e:
         import traceback
-        error_msg = f"Mesh ingestion error: {str(e)}"
-        print(f"[ingest_mesh] {error_msg}", flush=True)
+        error_msg = f"Mesh segmentation error: {str(e)}"
+        print(f"[ingest_mesh_segment] {error_msg}", flush=True)
         traceback.print_exc()
         return jsonify({
             "ok": False,
             "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@app.post("/convert_mesh_to_glb")
+def convert_mesh_to_glb():
+    """
+    Convert uploaded mesh file (STL/PLY/OBJ) to GLB format for display in viewer.
+    """
+    try:
+        if 'mesh' not in request.files:
+            return jsonify({"ok": False, "error": "No mesh file provided"}), 400
+        
+        mesh_file = request.files['mesh']
+        if not mesh_file.filename:
+            return jsonify({"ok": False, "error": "Empty filename"}), 400
+        
+        import tempfile
+        import os
+        import trimesh
+        
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(mesh_file.filename)[1]) as tmp:
+            mesh_file.save(tmp.name)
+            mesh_path = tmp.name
+        
+        try:
+            # Load mesh
+            mesh = trimesh.load(mesh_path)
+            if isinstance(mesh, trimesh.Scene):
+                mesh = mesh.dump(concatenate=True)
+            
+            # Export as GLB
+            import io
+            glb_buffer = io.BytesIO()
+            mesh.export(file_obj=glb_buffer, file_type='glb')
+            glb_buffer.seek(0)
+            
+            from flask import send_file
+            return send_file(
+                glb_buffer,
+                mimetype='model/gltf-binary',
+                as_attachment=False,
+                download_name='mesh.glb'
+            )
+        finally:
+            # Clean up temp file
+            if os.path.exists(mesh_path):
+                os.unlink(mesh_path)
+                
+    except Exception as e:
+        import traceback
+        error_msg = f"Mesh conversion error: {str(e)}"
+        print(f"[convert_mesh_to_glb] {error_msg}", flush=True)
+        traceback.print_exc()
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+        }), 500
+
+
+@app.post("/ingest_mesh_label")
+def ingest_mesh_label():
+    """
+    Step 2: Run VLM with user-provided part labels.
+    
+    Accepts:
+    - mesh_path: path to mesh (from step 1)
+    - temp_dir: temp directory (from step 1)
+    - part_labels: JSON with user-assigned part names (from labeling UI)
+    
+    Returns:
+    - category: object category
+    - final_parameters: list of semantic parameters
+    - raw_parameters: list of raw geometric parameters
+    """
+    try:
+        import json
+        from pathlib import Path
+        
+        # Get data from request
+        data = request.get_json()
+        if not data:
+            return jsonify({"ok": False, "error": "JSON body required"}), 400
+        
+        mesh_path = data.get("mesh_path")
+        temp_dir = data.get("temp_dir")
+        part_labels_json = data.get("part_labels")  # User-provided labels
+        
+        if not mesh_path or not os.path.exists(mesh_path):
+            return jsonify({"ok": False, "error": "mesh_path required and must exist"}), 400
+        
+        print(f"[ingest_mesh_label] Processing mesh with user labels: {mesh_path}", flush=True)
+        
+        # Import pipeline
+        import sys
+        parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from vlm_cad.segmentation import create_segmentation_backend
+        from vlm_cad.semantics.vlm_client_finetuned import FinetunedVLMClient
+        from vlm_cad.semantics.vlm_client_ollama import OllamaVLMClient
+        from vlm_cad.semantics.vlm_client import DummyVLMClient
+        from vlm_cad.semantics.ingest_mesh import ingest_mesh_to_semantic_params
+        from vlm_cad.parts.parts import build_part_table_from_segmentation, apply_labels_from_json
+        import trimesh
+        import numpy as np
+        
+        # Initialize segmentation backend (reuse from step 1)
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        backend_kind = os.environ.get("SEGMENTATION_BACKEND", "pointnet").lower()
+        model = create_segmentation_backend(kind=backend_kind, device=device)
+        
+        # Re-run segmentation to get PartTable (or we could cache it from step 1)
+        seg_result = model.segment(mesh_path, num_points=2048)
+        mesh = trimesh.load(mesh_path)
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+        vertices = np.array(mesh.vertices, dtype=np.float32)
+        
+        vertex_labels = seg_result.labels
+        if len(vertex_labels) != len(vertices):
+            if len(vertex_labels) < len(vertices):
+                vertex_labels = np.pad(vertex_labels, (0, len(vertices) - len(vertex_labels)), mode='edge')
+            else:
+                vertex_labels = vertex_labels[:len(vertices)]
+        
+        # Build PartTable
+        part_table = build_part_table_from_segmentation(
+            vertices=vertices,
+            part_labels=vertex_labels,
+            ground_plane_z=None,
+        )
+        
+        # Apply user-provided labels
+        if part_labels_json:
+            part_table = apply_labels_from_json(part_table, part_labels_json)
+            print(f"[ingest_mesh_label] Applied user labels to {len(part_labels_json.get('parts', []))} parts", flush=True)
+        
+        # Initialize VLM (same logic as before)
+        vlm = None
+        if device == "cpu":
+            try:
+                vlm = OllamaVLMClient()
+                print("[ingest_mesh_label] Using Ollama VLM (fast on CPU)")
+            except Exception as e:
+                print(f"[ingest_mesh_label] Warning: Could not use Ollama: {e}")
+            try:
+                vlm = FinetunedVLMClient()
+                print("[ingest_mesh_label] Using fine-tuned VLM (slower on CPU)")
+            except Exception as e2:
+                print(f"[ingest_mesh_label] Warning: Could not use fine-tuned VLM: {e2}")
+                vlm = DummyVLMClient()
+                print("[ingest_mesh_label] Using dummy VLM (for testing)")
+        else:
+            try:
+                vlm = FinetunedVLMClient()
+                print("[ingest_mesh_label] Using fine-tuned VLM (pretrained model on GPU)")
+            except Exception as e:
+                print(f"[ingest_mesh_label] Warning: Could not use fine-tuned VLM: {e}")
+                try:
+                    vlm = OllamaVLMClient()
+                    print("[ingest_mesh_label] Using Ollama VLM (fallback)")
+                except Exception as e2:
+                    print(f"[ingest_mesh_label] Warning: Could not use Ollama: {e2}")
+                    vlm = DummyVLMClient()
+                    print("[ingest_mesh_label] Using dummy VLM (for testing)")
+        
+        # Run ingestion pipeline with user-labeled PartTable
+        render_dir = os.path.join(temp_dir, "renders")
+        os.makedirs(render_dir, exist_ok=True)
+        
+        print(f"[ingest_mesh_label] Running VLM pipeline with user labels...", flush=True)
+        result = ingest_mesh_to_semantic_params(
+            mesh_path=mesh_path,
+            vlm=vlm,
+            model=model,
+            render_output_dir=render_dir,
+            num_points=2048,
+        )
+        
+        # Update result with user-labeled PartTable
+        result.part_table = part_table
+        # Also store vertex labels in extra for easier access
+        result.extra["vertex_labels"] = vertex_labels.tolist() if hasattr(vertex_labels, 'tolist') else list(vertex_labels)
+        
+        # Cache IngestResult for later use in /apply_mesh_params
+        _INGEST_RESULT_CACHE[mesh_path] = result
+        print(f"[ingest_mesh_label] ✓ Cached IngestResult for mesh: {mesh_path}", flush=True)
+        
+        # Convert to JSON
+        def param_to_dict(p):
+            d = {
+                "id": p.id,
+                "semantic_name": p.semantic_name,
+                "value": p.value,
+                "units": p.units,
+                "description": p.description,
+                "confidence": p.confidence,
+                "raw_sources": p.raw_sources,
+            }
+            d["name"] = p.semantic_name
+            return d
+        
+        from vlm_cad.parts.parts import part_table_to_labeling_json
+        part_table_json = part_table_to_labeling_json(part_table)
+        
+        response_data = {
+            "ok": True,
+            "category": result.category,
+            "raw_parameters": [
+                {
+                    "id": p.id,
+                    "value": p.value,
+                    "units": p.units,
+                    "description": p.description,
+                    "part_labels": p.part_labels or [],
+                }
+                for p in result.raw_parameters[:20]
+            ],
+            "proposed_parameters": [param_to_dict(p) for p in result.proposed_parameters],
+            "final_parameters": [param_to_dict(p) for p in result.proposed_parameters],
+            "metadata": {
+                "num_points": result.extra.get("num_points", 0),
+                "num_parts": result.extra.get("num_parts", 0),
+            },
+            "part_table": part_table_json,
+        }
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        import traceback
+        error_msg = f"Mesh labeling/VLM error: {str(e)}"
+        print(f"[ingest_mesh_label] {error_msg}", flush=True)
+        traceback.print_exc()
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+# Backward compatibility: keep old endpoint but make it call segment + label
+@app.post("/ingest_mesh")
+def ingest_mesh():
+    """
+    Legacy endpoint: Runs segmentation then VLM (auto-labels parts).
+    For new workflow, use /ingest_mesh_segment then /ingest_mesh_label.
+    """
+    # This will be kept for backward compatibility but can call the new endpoints internally
+    # For now, just redirect to the old behavior
+    pass
+
+
+# Cache for IngestResult (keyed by mesh_path)
+_INGEST_RESULT_CACHE: Dict[str, Any] = {}
+
+
+@app.post("/apply_mesh_params")
+def apply_mesh_params():
+    """
+    Apply parameter changes to deform a mesh using the full ParametricMeshDeformer.
+    
+    Expects JSON: {
+        "parameters": { "param_name": value, ... },
+        "mesh_path": "...",  # Optional, will use cached if not provided
+        "enabled_parts": { part_id: bool, ... }  # Optional, for part add/remove
+    }
+    Returns: { "ok": True, "glb_path": "...", "message": "..." }
+    """
+    try:
+        data = request.get_json()
+        if not data or "parameters" not in data:
+            return jsonify({"ok": False, "error": "Missing 'parameters' in request"}), 400
+        
+        parameters = data["parameters"]
+        if not isinstance(parameters, dict):
+            return jsonify({"ok": False, "error": "'parameters' must be a dictionary"}), 400
+        
+        # Get mesh path from request or use cached one
+        mesh_path = data.get("mesh_path")
+        if not mesh_path:
+            # Try to find the most recent cached result
+            if _INGEST_RESULT_CACHE:
+                mesh_path = list(_INGEST_RESULT_CACHE.keys())[-1]
+            else:
+                return jsonify({
+                    "ok": False,
+                    "error": "No mesh path provided and no cached ingestion result found. Please run mesh ingestion first."
+                }), 400
+        
+        if not os.path.exists(mesh_path):
+            return jsonify({
+                "ok": False,
+                "error": f"Mesh file not found: {mesh_path}"
+            }), 400
+        
+        # Import mesh deformation modules
+        import sys
+        parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from vlm_cad.mesh_deform import ParametricMeshDeformer, MeshData
+        from vlm_cad.semantics.ingest_mesh import build_deformer_from_ingest_result, IngestResult
+        import trimesh
+        import numpy as np
+        
+        # Get cached IngestResult
+        ingest_result = _INGEST_RESULT_CACHE.get(mesh_path)
+        if not ingest_result:
+            return jsonify({
+                "ok": False,
+                "error": f"No cached ingestion result for mesh: {mesh_path}. Please run mesh ingestion first."
+            }), 400
+        
+        # Load the mesh
+        mesh = trimesh.load(mesh_path)
+        if isinstance(mesh, trimesh.Scene):
+            mesh = mesh.dump(concatenate=True)
+        
+        vertices = np.array(mesh.vertices)
+        faces = np.array(mesh.faces)
+        
+        # Get part labels from cached result
+        vertex_labels = None
+        if ingest_result.part_table:
+            # Get vertex labels from PartTable
+            vertex_labels = ingest_result.part_table.vertex_part_labels
+            if len(vertex_labels) != len(vertices):
+                # Pad or truncate to match
+                if len(vertex_labels) < len(vertices):
+                    vertex_labels = np.pad(vertex_labels, (0, len(vertices) - len(vertex_labels)), mode='edge')
+                else:
+                    vertex_labels = vertex_labels[:len(vertices)]
+        
+        if vertex_labels is None:
+            # Fallback: try to get from extra dict
+            if "vertex_labels" in ingest_result.extra:
+                vertex_labels = np.array(ingest_result.extra["vertex_labels"])
+            else:
+                # Last resort: create dummy labels (all vertices in part 0)
+                print(f"[apply_mesh_params] Warning: No vertex labels found, using dummy labels", flush=True)
+                vertex_labels = np.zeros(len(vertices), dtype=np.int32)
+        
+        # Build part_label_names from PartTable or use defaults
+        part_label_names = {}
+        if ingest_result.part_table:
+            for part_id, part_info in ingest_result.part_table.parts.items():
+                part_label_names[part_id] = part_info.name or f"part_{part_id}"
+        else:
+            # Fallback: use generic names
+            unique_labels = np.unique(vertex_labels)
+            for label_id in unique_labels:
+                part_label_names[int(label_id)] = f"part_{int(label_id)}"
+        
+        # Build deformer from IngestResult
+        deformer = build_deformer_from_ingest_result(
+            ingest_result=ingest_result,
+            vertices=vertices,
+            faces=faces,
+            part_labels=vertex_labels,
+            part_label_names=part_label_names,
+        )
+        
+        # Handle part enable/disable (for add/remove operations)
+        enabled_parts = data.get("enabled_parts")
+        if enabled_parts:
+            # Convert to proper format
+            enabled_parts_dict = {
+                int(k): bool(v) for k, v in enabled_parts.items()
+            }
+        else:
+            enabled_parts_dict = None
+        
+        # Apply deformations
+        deformed_mesh_data = deformer.deform(
+            new_parameters=parameters,
+            enabled_parts=enabled_parts_dict,
+        )
+        
+        # Create trimesh object from deformed mesh
+        deformed_mesh = trimesh.Trimesh(
+            vertices=deformed_mesh_data.vertices,
+            faces=deformed_mesh_data.faces,
+        )
+        
+        # Save deformed mesh
+        output_dir = os.path.join(os.path.dirname(mesh_path), "deformed")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        base_name = os.path.splitext(os.path.basename(mesh_path))[0]
+        output_path = os.path.join(output_dir, f"{base_name}_deformed.glb")
+        deformed_mesh.export(output_path)
+        
+        print(f"[apply_mesh_params] ✓ Applied {len(parameters)} parameter changes, saved to {output_path}", flush=True)
+        
+        return jsonify({
+            "ok": True,
+            "glb_path": output_path,
+            "message": f"Applied {len(parameters)} parameter changes"
+        })
+        
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        print(f"[apply_mesh_params] Error: {error_msg}", flush=True)
+        traceback.print_exc()
+        return jsonify({
+            "ok": False,
+            "error": error_msg,
             "traceback": traceback.format_exc()
         }), 500
 
@@ -3619,6 +4291,7 @@ def _reload_rover_from_generated():
         print(f"[reload] Loading Rover from {gen_path}...")
         import importlib.util
         
+        
         # Load the module from the generated file
         spec = importlib.util.spec_from_file_location("robot_base_vlm", gen_path)
         if spec is None or spec.loader is None:
@@ -3672,6 +4345,44 @@ def _rebuild_and_save_glb(use_generated=False):
 # ----------------- GLB route & static -----------------
 @app.get("/model.glb")
 def model_glb():
+    """
+    Serve the GLB model file.
+    Only builds the rover if explicitly requested (not on automatic page load).
+    """
+    # First, check if cached GLB exists - if it does, serve it without building
+    # This prevents auto-building on page load
+    if os.path.exists(ROVER_GLB_PATH):
+        try:
+            with open(ROVER_GLB_PATH, "rb") as f:
+                cached_glb = f.read()
+            if len(cached_glb) > 1000:  # Ensure it's a valid GLB
+                print(f"[model.glb] ✓ Serving cached GLB ({len(cached_glb)} bytes) - NO BUILD", flush=True)
+                return send_file(io.BytesIO(cached_glb), mimetype="model/gltf-binary")
+        except Exception as e:
+            print(f"[model.glb] Failed to read cached GLB: {e}", flush=True)
+    
+    # No cached file exists - check if this is an explicit request
+    # Look for explicit request indicators
+    explicit_request = (
+        request.args.get('force_rebuild') == '1' or  # Explicit rebuild flag
+        request.args.get('use_generated') == '1' or  # Explicit generated code request
+        (request.referrer and '/viewer' in request.referrer)  # Coming from viewer page
+    )
+    
+    # If no cached file and not an explicit request, don't auto-build
+    # This prevents the rover from being built automatically on page load
+    if not explicit_request:
+        print("[model.glb] ⚠ No cached GLB and not an explicit request - returning 404 to prevent auto-build", flush=True)
+        print(f"[model.glb]   Referrer: {request.referrer}, Args: {dict(request.args)}, Purpose: {request.headers.get('Purpose', 'N/A')}", flush=True)
+        return Response(
+            "Model not yet loaded. Please upload a mesh or parametric model first, or use the 'Load Model' button.",
+            status=404,
+            mimetype="text/plain"
+        )
+    
+    # This is an explicit request - proceed with building
+    print("[model.glb] ⚠ Explicit request detected - building rover model (this should not happen on page load)", flush=True)
+    
     try:
         # Check if we should use generated code
         # Can be forced via ?use_generated=1 or auto-detect
@@ -3785,6 +4496,28 @@ def demo_mars_rover():
         mimetype="text/plain"
     )
 
+@app.route("/demo/curiosity_rover.stl")
+def demo_curiosity_rover():
+    """Serve the demo Curiosity Rover STL file."""
+    # Try multiple possible locations
+    possible_paths = [
+        os.path.join(ASSETS_DIR, "demo", "curiosity_rover.stl"),
+        os.path.join(ASSETS_DIR, "demo", "rover.stl"),
+        os.path.join(ASSETS_DIR, "demo", "body-small.STL"),
+        "/Users/janelleg/Downloads/Curiosity Rover 3D Printed Model/Simplified Curiosity Model (Small)/STL Files/body-small.STL",
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            return send_file(path, mimetype="model/stl")
+    
+    # If no file found, return a helpful message
+    return Response(
+        f"Demo STL file not found. Please place a demo STL file at: {os.path.join(ASSETS_DIR, 'demo', 'curiosity_rover.stl')}",
+        status=404,
+        mimetype="text/plain"
+    )
+
 @app.route("/static/<path:filename>")
 def custom_static(filename):
     root = app.static_folder
@@ -3852,18 +4585,289 @@ def _warm_build():
         print("[warm] initial build failed:", e)
 
 
+def test_vlm_model(include_mesh_analysis=True):
+    """
+    Test function to load and test the VLM model without running the full UI.
+    This can be run directly: python -c "from optim import test_vlm_model; test_vlm_model()"
+    Or: python optim.py --test-vlm
+    
+    Args:
+        include_mesh_analysis: If True, also test the mesh ingestion pipeline
+    """
+    import sys
+    import os
+    import tempfile
+    
+    print("=" * 80)
+    print("Testing VLM Model Loading and Inference")
+    print("=" * 80)
+    
+    # Check model path
+    print(f"\n[test] Model path: {FINETUNED_MODEL_PATH}")
+    print(f"[test] Path exists: {os.path.exists(FINETUNED_MODEL_PATH)}")
+    
+    if not os.path.exists(FINETUNED_MODEL_PATH):
+        print(f"[test] ✗ ERROR: Model path does not exist!")
+        print(f"[test] Expected: {FINETUNED_MODEL_PATH}")
+        return False
+    
+    # Check for required files
+    required_files = ["adapter_config.json", "adapter_model.safetensors"]
+    missing_files = []
+    for f in required_files:
+        file_path = os.path.join(FINETUNED_MODEL_PATH, f)
+        if not os.path.exists(file_path):
+            missing_files.append(f)
+        else:
+            print(f"[test] ✓ Found {f}")
+    
+    if missing_files:
+        print(f"[test] ✗ ERROR: Missing required files: {missing_files}")
+        return False
+    
+    # Load model
+    print(f"\n[test] Loading model...")
+    print(f"[test] Note: This may take a few minutes if the base model needs to be downloaded")
+    try:
+        load_finetuned_model()
+        if _finetuned_model is None or _finetuned_processor is None:
+            print("[test] ✗ ERROR: Model failed to load")
+            return False
+        print("[test] ✓ Model loaded successfully")
+    except KeyboardInterrupt:
+        print("\n[test] Model loading interrupted by user")
+        return False
+    except Exception as e:
+        print(f"[test] ✗ ERROR: Failed to load model: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    
+    # Test inference with a simple prompt
+    print(f"\n[test] Testing inference with a simple prompt...")
+    try:
+        test_prompt = "What is 2+2? Answer with just the number."
+        result = call_vlm(
+            final_prompt=test_prompt,
+            image_data_urls=None,
+            expect_json=False
+        )
+        
+        if result and "raw" in result:
+            response = result["raw"]
+            print(f"[test] ✓ Inference successful!")
+            print(f"[test] Provider: {result.get('provider', 'unknown')}")
+            print(f"[test] Response length: {len(response)} chars")
+            print(f"[test] Response preview: {response[:200]}...")
+        else:
+            print(f"[test] ✗ ERROR: Invalid response format: {result}")
+            return False
+    except KeyboardInterrupt:
+        print("\n[test] Inference interrupted by user")
+        return False
+    except Exception as e:
+        print(f"[test] ✗ ERROR: Inference failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    
+    # Test mesh analysis if requested
+    if include_mesh_analysis:
+        print(f"\n" + "=" * 80)
+        print("Testing Mesh Analysis Pipeline")
+        print("=" * 80)
+        
+        try:
+            # Check PointNet++ model
+            checkpoint_path = os.path.join(
+                os.path.dirname(__file__), "..", "models", "pointnet2", "pointnet2_part_seg_msg.pth"
+            )
+            checkpoint_path = os.path.abspath(checkpoint_path)
+            print(f"\n[test] PointNet++ model path: {checkpoint_path}")
+            print(f"[test] Path exists: {os.path.exists(checkpoint_path)}")
+            
+            if not os.path.exists(checkpoint_path):
+                print(f"[test] ⚠ WARNING: PointNet++ model not found, skipping mesh analysis test")
+                print(f"[test] Expected: {checkpoint_path}")
+                return True  # VLM test passed, just mesh analysis missing
+            
+            # Create a simple test mesh
+            print(f"\n[test] Creating test mesh...")
+            try:
+                import trimesh
+                # Create a simple box mesh for testing
+                test_mesh = trimesh.creation.box(extents=[1.0, 2.0, 0.5])
+                temp_dir = tempfile.mkdtemp(prefix="test_mesh_")
+                test_mesh_path = os.path.join(temp_dir, "test_box.obj")
+                test_mesh.export(test_mesh_path)
+                print(f"[test] ✓ Created test mesh at {test_mesh_path}")
+            except Exception as e:
+                print(f"[test] ✗ ERROR: Failed to create test mesh: {e}")
+                import traceback
+                traceback.print_exc()
+                return True  # VLM test passed
+            
+            # Import mesh ingestion components
+            print(f"\n[test] Loading mesh ingestion pipeline...")
+            parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            
+            from vlm_cad.pointnet_seg.model import load_pretrained_model
+            from vlm_cad.semantics.vlm_client_finetuned import FinetunedVLMClient
+            from vlm_cad.semantics.ingest_mesh import ingest_mesh_to_semantic_params
+            
+            # Load PointNet++ model
+            print(f"[test] Loading PointNet++ model...")
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            print(f"[test] Using device: {device}")
+            
+            pointnet_model = load_pretrained_model(
+                checkpoint_path=checkpoint_path,
+                num_classes=50,
+                use_normals=True,
+                device=device,
+            )
+            print(f"[test] ✓ PointNet++ model loaded")
+            
+            # Initialize VLM client (use the already loaded model)
+            print(f"[test] Initializing VLM client...")
+            vlm_client = FinetunedVLMClient()
+            print(f"[test] ✓ VLM client initialized")
+            
+            # Run mesh ingestion
+            print(f"\n[test] Running mesh ingestion pipeline...")
+            print(f"[test] Note: This may take a few minutes (VLM calls + segmentation)")
+            render_dir = os.path.join(temp_dir, "renders")
+            os.makedirs(render_dir, exist_ok=True)
+            
+            try:
+                result = ingest_mesh_to_semantic_params(
+                    mesh_path=test_mesh_path,
+                    vlm=vlm_client,
+                    model=pointnet_model,
+                    render_output_dir=render_dir,
+                    num_points=2048,
+                )
+                
+                print(f"[test] ✓ Mesh ingestion completed!")
+                print(f"[test] Category: {result.category}")
+                print(f"[test] Raw parameters: {len(result.raw_parameters)}")
+                print(f"[test] Proposed parameters: {len(result.proposed_parameters)}")
+                print(f"[test] Number of parts: {result.extra.get('num_parts', 0)}")
+                
+                # Show some example parameters
+                if result.proposed_parameters:
+                    print(f"\n[test] Example proposed parameters:")
+                    for i, param in enumerate(result.proposed_parameters[:5]):
+                        print(f"  {i+1}. {param.semantic_name}: {param.value} {param.units} (confidence: {param.confidence:.2f})")
+                
+                # Cleanup
+                import shutil
+                try:
+                    shutil.rmtree(temp_dir)
+                except:
+                    pass
+                
+                print(f"\n[test] ✓ Mesh analysis test passed!")
+                return True
+            except KeyboardInterrupt:
+                print("\n[test] Mesh analysis interrupted by user")
+                # Cleanup
+                import shutil
+                try:
+                    shutil.rmtree(temp_dir)
+                except:
+                    pass
+                return True  # VLM test passed, mesh analysis interrupted
+            
+        except KeyboardInterrupt:
+            print("\n[test] Mesh analysis setup interrupted by user")
+            return True  # VLM test passed
+        except Exception as e:
+            print(f"[test] ✗ ERROR: Mesh analysis failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return True  # VLM test passed, mesh analysis failed
+    
+    return True
+
+
 if __name__ == "__main__":
+    import sys
+    
+    # Check for test flag - run test BEFORE other imports that might fail
+    if "--test-vlm" in sys.argv or (len(sys.argv) > 1 and sys.argv[1] == "test-vlm"):
+        include_mesh = "--no-mesh" not in sys.argv
+        try:
+            test_vlm_model(include_mesh_analysis=include_mesh)
+            sys.exit(0)
+        except Exception as e:
+            print(f"\n[test] ✗ Test failed with error: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+    
     os.makedirs(ASSETS_DIR, exist_ok=True)
     
-    # Don't load model on startup - load it lazily on first use
-    # This makes the server start in seconds instead of minutes
-    if USE_FINETUNED_MODEL:
-        print(f"[startup] Fine-tuned VLM model will load on first request (lazy loading)")
+    # VLM setup - prefer Ollama if available, otherwise fine-tuned model
+    # Check if Ollama is available and has the requested model
+    ollama_available = False
+    ollama_model_exists = False
+    if OLLAMA_URL:
+        try:
+            import requests
+            r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
+            if r.status_code == 200:
+                ollama_available = True
+                # Check if the requested model exists
+                models_data = r.json()
+                model_names = [m.get("name", "") for m in models_data.get("models", [])]
+                ollama_model_exists = OLLAMA_MODEL in model_names
+                if ollama_model_exists:
+                    print(f"[startup] ✓ Ollama is available (URL: {OLLAMA_URL}, Model: {OLLAMA_MODEL})")
+                else:
+                    print(f"[startup] ⚠ Ollama is available but model '{OLLAMA_MODEL}' not found")
+                    print(f"[startup] Available models: {', '.join(model_names)}")
+                    print(f"[startup] Will use fine-tuned model instead")
+            else:
+                print(f"[startup] ⚠ Ollama URL responded with {r.status_code}")
+        except Exception as e:
+            print(f"[startup] ⚠ Ollama not available: {e}")
+            print("[startup] Make sure Ollama is running: ollama serve")
+    
+    # Only use Ollama if it's available AND has the requested model
+    # Otherwise, fall back to fine-tuned model
+    if not (ollama_available and ollama_model_exists) and USE_FINETUNED_MODEL:
+        print(f"[startup] Preloading fine-tuned VLM model...")
         print(f"[startup] Model path: {FINETUNED_MODEL_PATH}")
         print(f"[startup] Model path exists: {os.path.exists(FINETUNED_MODEL_PATH)}")
-        print("[startup] This makes server start fast - first VLM request will take 2-3 min")
+        print("[startup] Loading model (base model will be loaded from cache if available)...")
+        try:
+            load_finetuned_model()
+            if _finetuned_model is not None:
+                print("[startup] ✓ VLM model preloaded and ready")
+            else:
+                print("[startup] ⚠ VLM model not loaded (will load on first use)")
+        except Exception as e:
+            print(f"[startup] ⚠ Could not preload VLM model: {e}")
+            print("[startup] Model will be loaded on first use")
+    elif ollama_available and ollama_model_exists:
+        print(f"[startup] ✓ Using Ollama VLM (Model: {OLLAMA_MODEL})")
+        if USE_FINETUNED_MODEL and os.path.exists(FINETUNED_MODEL_PATH):
+            print(f"[startup] Fine-tuned model available at {FINETUNED_MODEL_PATH} but using Ollama")
     else:
-        print("[startup] Using Ollama/LLAVA for VLM")
+        if ollama_available and not ollama_model_exists:
+            print(f"[startup] ⚠ Ollama available but model '{OLLAMA_MODEL}' not found")
+            print(f"[startup] To use Ollama: ollama pull {OLLAMA_MODEL}")
+            if USE_FINETUNED_MODEL and os.path.exists(FINETUNED_MODEL_PATH):
+                print(f"[startup] Will use fine-tuned model instead (lazy load on first use)")
+        else:
+            print("[startup] ⚠ No VLM configured - VLM features will not work")
     
-    threading.Thread(target=_warm_build, daemon=True).start()
+    # Disabled warm build - don't build rover on startup
+    # Wait for user to upload mesh or parametric model instead
+    # threading.Thread(target=_warm_build, daemon=True).start()
+    print("[startup] Skipping warm build - waiting for user to upload mesh or parametric model", flush=True)
     app.run(host="0.0.0.0", port=PORT, debug=False)

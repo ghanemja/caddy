@@ -21,3 +21,8 @@ cqparts_misc
 # Optional: For quantization (uncomment if needed)
 # bitsandbytes
 
+# Hunyuan3D-Part (optional, for P3-SAM segmentation backend)
+# Install with: pip install git+https://github.com/Tencent-Hunyuan/Hunyuan3D-Part.git
+# Or use: huggingface_hub (for model download)
+huggingface_hub>=0.20.0
+

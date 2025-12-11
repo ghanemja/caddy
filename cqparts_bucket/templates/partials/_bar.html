@@ -1,15 +1,24 @@
 <div id="bar">
-  <button id="reload">Reload Model</button>
-  <button id="clear">Clear Selection</button>
-  <span>Selected:</span> <span id="name">—</span>
-  <span id="log" style="margin-left: 12px"></span>
-  <span id="tools" style="margin-left: auto">
-    <button id="toggleLeftPanel" class="btn" title="Collapse/Expand Left Panel">◀ Left</button>
-    <button id="toggleRightPanel" class="btn" title="Collapse/Expand Right Panel">Right ▶</button>
-    <label>
-      <input type="checkbox" id="toggleLabels" checked /> Show labels
-    </label>
-    <button id="fitAll" class="btn">Fit All</button>
-  </span>
-  <span class="pill" id="modeHint" style="margin-left: 8px"></span>
+  <div id="bar-left">
+    <button id="reload" class="bar-button">Reload Model</button>
+    <button id="clear" class="bar-button">Clear Selection</button>
+    <span style="margin-left: 16px;">Selected:</span> <span id="name">—</span>
+    <span id="log" style="margin-left: 12px"></span>
+  </div>
+  <div id="bar-center">
+    <!-- Center content if needed -->
+  </div>
+  <div id="bar-right">
+    <div id="tools">
+      <label>
+        <input type="checkbox" id="toggleLabels" checked /> Show labels
+      </label>
+      <button id="fitAll" class="btn">Fit All</button>
+      <button id="viewHistory" class="bar-button" title="View Processing History">History</button>
+    </div>
+    <div id="logo-placeholder">
+      <!-- Logo will go here -->
+    </div>
+    <span class="pill" id="modeHint" style="margin-left: 8px"></span>
+  </div>
 </div>

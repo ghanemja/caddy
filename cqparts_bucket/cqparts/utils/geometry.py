@@ -148,9 +148,11 @@ class CoordSystem(cadquery.Plane):
             i & = cos(\beta) cos(\gamma)
         """
         # Create reference points at origin
-        offset = FreeCAD.Vector(0, 0, 0)
-        x_vertex = FreeCAD.Vector(1, 0, 0)  # vertex along +X-axis
-        z_vertex = FreeCAD.Vector(0, 0, 1)  # vertex along +Z-axis
+        # Use CadQuery.Vector instead of FreeCAD.Vector to avoid 'wrapped' attribute error
+        # CadQuery Matrix.multiply() expects objects with 'wrapped' attribute
+        offset = cadquery.Vector(0, 0, 0)
+        x_vertex = cadquery.Vector(1, 0, 0)  # vertex along +X-axis
+        z_vertex = cadquery.Vector(0, 0, 1)  # vertex along +Z-axis
 
         # Transform reference points
         offset = matrix.multiply(offset)
@@ -162,7 +164,13 @@ class CoordSystem(cadquery.Plane):
         z_axis = z_vertex - offset
 
         # Return new instance
-        vect_tuple = lambda v: (v.x, v.y, v.z)
+        # Convert CadQuery.Vector to tuple (handles both .x/.y/.z and .toTuple())
+        def vect_tuple(v):
+            if hasattr(v, 'toTuple'):
+                return v.toTuple()
+            else:
+                return (v.x, v.y, v.z)
+        
         return cls(
             origin=vect_tuple(offset),
             xDir=vect_tuple(x_axis),
