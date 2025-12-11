@@ -633,35 +633,86 @@ function syncSidebar() {
         return;
     }
     compList.innerHTML = "";
-    classMap.forEach((entry, key) => {
-        const li = document.createElement("li");
-        li.dataset.key = key;
-        if (selectedClass === key) li.classList.add("active");
-        const sw = document.createElement("span");
-        sw.className = "swatch";
-        sw.style.backgroundColor = "#" + entry.color.getHexString();
-        const txt = document.createElement("span");
-        txt.textContent = key;
-        const cnt = document.createElement("span");
-        cnt.className = "count";
-        cnt.textContent = entry.count;
-        li.appendChild(sw);
-        li.appendChild(txt);
-        li.appendChild(cnt);
-        li.onclick = () => selectClass(key, true);
-        compList.appendChild(li);
-    });
+    
+    // If we have segmentation data, show parts from segmentation instead of class registry
+    if (segmentationData && segmentationData.part_table && segmentationData.part_table.parts) {
+        const parts = segmentationData.part_table.parts || [];
+        parts.forEach(part => {
+            const partId = part.part_id;
+            const partName = part.provisional_name || part.name || `part_${partId}`;
+            const partColor = getPartColor(partId);
+            
+            const li = document.createElement("li");
+            li.dataset.key = partName;
+            li.dataset.partId = partId;
+            const sw = document.createElement("span");
+            sw.className = "swatch";
+            sw.style.backgroundColor = colorToHex(partColor);
+            const txt = document.createElement("span");
+            txt.textContent = partName;
+            const cnt = document.createElement("span");
+            cnt.className = "count";
+            cnt.textContent = partId;
+            li.appendChild(sw);
+            li.appendChild(txt);
+            li.appendChild(cnt);
+            li.onclick = () => {
+                // Highlight this part in the mesh
+                if (group) {
+                    // Remove previous highlights
+                    [...compList.children].forEach((l) => l.classList.remove("active"));
+                    li.classList.add("active");
+                    // Could add part highlighting logic here if needed
+                }
+            };
+            compList.appendChild(li);
+        });
+    } else {
+        // Use class registry for non-segmented meshes
+        classMap.forEach((entry, key) => {
+            const li = document.createElement("li");
+            li.dataset.key = key;
+            if (selectedClass === key) li.classList.add("active");
+            const sw = document.createElement("span");
+            sw.className = "swatch";
+            sw.style.backgroundColor = "#" + entry.color.getHexString();
+            const txt = document.createElement("span");
+            txt.textContent = key;
+            const cnt = document.createElement("span");
+            cnt.className = "count";
+            cnt.textContent = entry.count;
+            li.appendChild(sw);
+            li.appendChild(txt);
+            li.appendChild(cnt);
+            li.onclick = () => selectClass(key, true);
+            compList.appendChild(li);
+        });
+    }
+    
     // chips live near VLM prompt now
     if (chips) {
         chips.innerHTML = "";
-        classMap.forEach((_, key) => {
-            const c = document.createElement("span");
-            c.className = "chip";
-            c.textContent = key;
-            c.title = "Insert into prompt";
-            c.onclick = () => insertText(` ${key} `);
-            chips.appendChild(c);
-        });
+        if (segmentationData && segmentationData.part_table && segmentationData.part_table.parts) {
+            const parts = segmentationData.part_table.parts || [];
+            parts.forEach(part => {
+                const partName = part.provisional_name || part.name || `part_${part.part_id}`;
+                const c = document.createElement("span");
+                c.className = "chip";
+                c.textContent = partName;
+                c.title = "Insert into prompt";
+                c.onclick = () => insertText(` ${partName} `);
+                chips.appendChild(c);
+            });
+        } else {
+            classMap.forEach((_, key) => {
+                const c = document.createElement("span");
+                c.className = "chip";
+                c.textContent = key;
+                c.title = "Insert into prompt";
+                c.onclick = () => insertText(` ${key} `);
+                chips.appendChild(c);
+            });
+        }
     }
     adjustColumns();
 }
@@ -1341,6 +1392,51 @@ if (resetMeshRot) {
                 const centerOffset = group.userData.centerOffset || null;
                 applyPartColorsToMesh(group, segmentationData, centerOffset);
             }
+        }
+    };
+}
+
+// Mesh translation controls
+if (meshTransX && meshTransXVal) {
+    meshTransX.oninput = () => {
+        const val = +meshTransX.value;
+        meshTransXVal.textContent = val.toFixed(1);
+        if (group) {
+            group.position.x = val;
+        }
+    };
+}
+
+if (meshTransY && meshTransYVal) {
+    meshTransY.oninput = () => {
+        const val = +meshTransY.value;
+        meshTransYVal.textContent = val.toFixed(1);
+        if (group) {
+            group.position.y = val;
+        }
+    };
+}
+
+if (meshTransZ && meshTransZVal) {
+    meshTransZ.oninput = () => {
+        const val = +meshTransZ.value;
+        meshTransZVal.textContent = val.toFixed(1);
+        if (group) {
+            group.position.z = val;
+        }
+    };
+}
+
+if (resetMeshTrans) {
+    resetMeshTrans.onclick = () => {
+        if (group) {
+            group.position.set(0, 0, 0);
+            if (meshTransX) meshTransX.value = 0;
+            if (meshTransXVal) meshTransXVal.textContent = "0.0";
+            if (meshTransY) meshTransY.value = 0;
+            if (meshTransYVal) meshTransYVal.textContent = "0.0";
+            if (meshTransZ) meshTransZ.value = 0;
+            if (meshTransZVal) meshTransZVal.textContent = "0.0";
         }
     };
 }

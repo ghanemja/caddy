@@ -182,11 +182,12 @@ def ingest_mesh_segment():
             else:
                 vertex_labels = vertex_labels[: len(vertices)]
 
-        # Build PartTable
+        # Build PartTable with preliminary names from segmentation
         part_table = build_part_table_from_segmentation(
             vertices=vertices,
             part_labels=vertex_labels,
             ground_plane_z=None,
+            preliminary_names=part_label_names,
         )
         part_table_json = part_table_to_labeling_json(part_table)
 
