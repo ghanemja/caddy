@@ -318,6 +318,13 @@ const meshRotY = document.getElementById("meshRotY"),
 const meshRotZ = document.getElementById("meshRotZ"),
     meshRotZVal = document.getElementById("meshRotZVal");
 const resetMeshRot = document.getElementById("resetMeshRot");
+const meshTransX = document.getElementById("meshTransX"),
+    meshTransXVal = document.getElementById("meshTransXVal");
+const meshTransY = document.getElementById("meshTransY"),
+    meshTransYVal = document.getElementById("meshTransYVal");
+const meshTransZ = document.getElementById("meshTransZ"),
+    meshTransZVal = document.getElementById("meshTransZVal");
+const resetMeshTrans = document.getElementById("resetMeshTrans");
 
 // console
 const stream = document.getElementById("consoleStream");
@@ -481,7 +488,7 @@ function fit() {
     
     // Use FOV-based distance calculation for proper zoom (similar to frameBox)
     const fov = THREE.MathUtils.degToRad(camera.fov);
-    const pad = 0.6; // Reduced padding for much closer zoom
+    const pad = 1.5; // Padding to fit entire mesh in view
     const dist = (maxDim * pad) / (2 * Math.tan(fov / 2));
     
     camera.near = Math.max(0.01, maxDim / 200);
@@ -876,6 +883,14 @@ async function loadMeshFile(file, filename) {
                     if (meshRotZ) meshRotZ.value = 0;
                     if (meshRotZVal) meshRotZVal.textContent = "0°";
                     
+                    // Initialize mesh translation controls
+                    if (meshTransX) meshTransX.value = 0;
+                    if (meshTransXVal) meshTransXVal.textContent = "0.0";
+                    if (meshTransY) meshTransY.value = 0;
+                    if (meshTransYVal) meshTransYVal.textContent = "0.0";
+                    if (meshTransZ) meshTransZ.value = 0;
+                    if (meshTransZVal) meshTransZVal.textContent = "0.0";
+                    
                     pivot.add(group);
                     
                     // Apply part colors if we have segmentation data (before building class registry)
@@ -891,7 +906,10 @@ async function loadMeshFile(file, filename) {
                     
                     placeLabels();
                     syncSidebar();
-                    fit();
+                    // Fit to view after a small delay to ensure mesh is fully rendered
+                    setTimeout(() => {
+                        fit();
+                    }, 100);
                     saveBaselineCam();
                     logLine(`Mesh loaded: ${filename}`);
                     URL.revokeObjectURL(glbUrl); // Clean up
@@ -955,8 +973,11 @@ async function loadDemoImage() {
   }
   
   try {
-    // Try rover.png first, then fall back to mars_rover.jpg
-    let response = await fetch('/demo/rover.png');
+    // Try airplane.png first, then fall back to rover.png, then mars_rover.jpg
+    let response = await fetch('/demo/airplane.png');
+    if (!response.ok) {
+      response = await fetch('/demo/rover.png');
+    }
     if (!response.ok) {
       response = await fetch('/demo/mars_rover.jpg');
     }
@@ -2044,14 +2065,18 @@ if (loadDemoSTLBtn) {
             loadDemoSTLBtn.disabled = true;
             loadDemoSTLBtn.textContent = 'Loading...';
             
-            // Fetch the demo STL file from server
-            const response = await fetch('/demo/curiosity_rover.stl');
+            // Fetch the demo STL file from server (try airplane.stl first, then curiosity_rover.stl)
+            let response = await fetch('/demo/airplane.stl');
+            if (!response.ok) {
+                response = await fetch('/demo/curiosity_rover.stl');
+            }
             if (!response.ok) {
                 throw new Error(`File not found (${response.status})`);
             }
             
             const blob = await response.blob();
-            const file = new File([blob], 'curiosity_rover.stl', { type: 'model/stl' });
+            const filename = response.url.includes('airplane') ? 'airplane.stl' : 'curiosity_rover.stl';
+            const file = new File([blob], filename, { type: 'model/stl' });
             
             // Create a DataTransfer to set the file input
             const dataTransfer = new DataTransfer();
@@ -2067,7 +2092,7 @@ if (loadDemoSTLBtn) {
             // Trigger change event
             meshFile.dispatchEvent(new Event('change', { bubbles: true }));
             
-            logLine('Loaded demo Curiosity Rover STL file', 'ok');
+            logLine(`Loaded demo STL file: ${filename}`, 'ok');
             loadDemoSTLBtn.textContent = 'Loaded Demo STL';
             loadDemoSTLBtn.style.background = '#5f476e';
             
@@ -2194,7 +2219,8 @@ if (ingestMesh) {
                 const parts = result.part_table.parts || [];
                 parts.forEach(part => {
                     const partId = part.part_id;
-                    const currentName = part.name || part.provisional_name || `part_${partId}`;
+                    // Use provisional_name (from segmentation) if name is not set by user
+                    const currentName = part.provisional_name || part.name || `part_${partId}`;
                     const shapeHint = part.shape_hint || 'unknown';
                     const touchesGround = part.touches_ground ? ' (touches ground)' : '';
                     
@@ -2211,7 +2237,8 @@ if (ingestMesh) {
                     html += `<span style="color: #1e293b; font-size: 13px; font-weight: 600;">${currentName}</span>`;
                     html += `<span style="color: #64748b; font-size: 11px;">${shapeHint}${touchesGround}</span>`;
                     html += `</div>`;
-                    html += `<input type="text" id="part_label_${partId}" value="${currentName}" placeholder="Enter semantic name (e.g., backrest)" style="width: 100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; margin-top: 4px;" />`;
+                    html += `<div style="font-size: 11px; color: #64748b; margin-bottom: 2px;">Preliminary name (edit to correct):</div>`;
+                    html += `<input type="text" id="part_label_${partId}" value="${currentName}" placeholder="Enter semantic name (e.g., backrest, wing, engine)" style="width: 100%; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; margin-top: 2px;" />`;
                     html += `</div>`;
                 });
                 partLabelingList.innerHTML = html;
