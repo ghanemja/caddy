@@ -12,7 +12,7 @@
     <div id="partLabelingSection" style="margin-top: 16px; display: none;">
       <h4 style="font-size: 14px; margin-bottom: 8px; font-weight: 600;">Label Parts</h4>
       <p style="font-size: 11px; color: #64748b; margin-bottom: 8px;">
-        Assign semantic names to each part (e.g., "backrest", "seat", "wheel"). Each part is shown with its ID and shape hint.
+        Review and correct the preliminary part names from segmentation. Each part shows its ID, preliminary name, and shape hint. Edit the names as needed (e.g., "backrest", "seat", "wing", "engine").
       </p>
       
       <!-- Part visualization/IDs display -->
@@ -21,6 +21,12 @@
           <strong>Part IDs:</strong> Each part has a unique ID shown below. Use these IDs to identify parts in the 3D viewer.
         </div>
         <div id="partIdsDisplay" style="font-size: 11px; color: #475569; font-family: monospace;"></div>
+        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e2e8f0;">
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 11px; color: #64748b; cursor: pointer;">
+            <input type="checkbox" id="meshVertexToggle" style="cursor: pointer;" />
+            <span>Show vertex colors (better part visualization)</span>
+          </label>
+        </div>
       </div>
       
       <div id="partLabelingList" style="max-height: 300px; overflow-y: auto; margin-bottom: 12px; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px;"></div>
@@ -32,8 +38,13 @@
       <h4 style="font-size: 14px; margin-bottom: 8px; font-weight: 600;">Extracted Parameters</h4>
       <div id="confirmParamsCategory" style="font-weight: bold; margin-bottom: 8px; font-size: 14px;"></div>
       <div id="confirmParamsList" style="font-size: 12px; margin-bottom: 12px;"></div>
+      <div style="padding: 8px; background: #fef3c7; border-radius: 6px; border-left: 3px solid #f59e0b; margin-bottom: 12px;">
+        <div style="font-size: 11px; color: #92400e;">
+          <strong>Review the parameters above.</strong> You can edit them in Step 4 before applying changes, or proceed to start iterating.
+        </div>
+      </div>
       <button id="confirmParamsBtn" class="proceed-button" style="width: 100%; padding: 12px; background: #5f476e; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
-        Proceed to Step 4 →
+        Confirm & Proceed to Step 4 →
       </button>
     </div>
     

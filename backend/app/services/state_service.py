@@ -2,7 +2,8 @@
 State Management Service
 Handles application state, history, and parameters.
 """
-from typing import Dict, Any, Optional, List
+
+from typing import Dict, Any, Optional, List, Tuple
 
 # Note: Global state variables are defined in run.py
 # This module provides functions that operate on those globals
@@ -49,7 +50,9 @@ def push_history(current_params, history, h_ptr, snapshot_fn):
     return h_ptr
 
 
-def restore(snapshot: Dict[str, Optional[float]], current_params: Dict[str, Optional[float]]):
+def restore(
+    snapshot: Dict[str, Optional[float]], current_params: Dict[str, Optional[float]]
+):
     """Restore state from a snapshot."""
     for k in current_params.keys():
         current_params[k] = snapshot.get(k, current_params[k])
@@ -59,12 +62,14 @@ def restore(snapshot: Dict[str, Optional[float]], current_params: Dict[str, Opti
 def snapshot_global() -> Dict[str, Optional[float]]:
     """Create a snapshot using global CURRENT_PARAMS."""
     from run import CURRENT_PARAMS
+
     return snapshot(CURRENT_PARAMS)
 
 
 def ensure_initial_history_global():
     """Ensure history is initialized with initial snapshot using globals."""
     from run import CURRENT_PARAMS, HISTORY, H_PTR, INIT_SNAPSHOT
+
     global INIT_SNAPSHOT
     if H_PTR == -1:
         INIT_SNAPSHOT = snapshot(CURRENT_PARAMS)
@@ -76,6 +81,7 @@ def ensure_initial_history_global():
 def push_history_global():
     """Push current state to history using globals."""
     from run import CURRENT_PARAMS, HISTORY, H_PTR, INIT_SNAPSHOT
+
     global H_PTR
     if H_PTR == -1:
         INIT_SNAPSHOT = snapshot(CURRENT_PARAMS)
@@ -90,6 +96,7 @@ def push_history_global():
 def restore_global(snapshot_data: Dict[str, Optional[float]]):
     """Restore state from a snapshot using globals."""
     from run import CURRENT_PARAMS
+
     restore(snapshot_data, CURRENT_PARAMS)
 
 
@@ -97,13 +104,18 @@ def get_state(which: str = "all") -> Dict[str, Any]:
     """Get current application state."""
     # Import from run.py to access global state
     from run import (
-        CURRENT_PARAMS, CONTEXT, HISTORY, H_PTR, INIT_SNAPSHOT,
-        PENDING_ADDS, STATE
+        CURRENT_PARAMS,
+        CONTEXT,
+        HISTORY,
+        H_PTR,
+        INIT_SNAPSHOT,
+        PENDING_ADDS,
+        STATE,
     )
     from app.core.component_registry import COMPONENT_REGISTRY
-    
+
     ensure_initial_history_global()
-    
+
     payload = {
         "initial": HISTORY[0] if HISTORY else INIT_SNAPSHOT or snapshot_global(),
         "current": snapshot_global(),
@@ -112,7 +124,7 @@ def get_state(which: str = "all") -> Dict[str, Any]:
         "history": HISTORY[: H_PTR + 1],
         "pending_adds": list(PENDING_ADDS),
     }
-    
+
     if which in payload:
         return {"ok": True, which: payload[which]}
     return {"ok": True, "state": payload}
@@ -122,25 +134,32 @@ def reset_state() -> Dict[str, Any]:
     """Reset state to initial values."""
     # Import from run.py to access global state
     from run import (
-        CURRENT_PARAMS, CONTEXT, HISTORY, H_PTR, INIT_SNAPSHOT,
-        PENDING_ADDS, STATE
+        CURRENT_PARAMS,
+        CONTEXT,
+        HISTORY,
+        H_PTR,
+        INIT_SNAPSHOT,
+        PENDING_ADDS,
+        STATE,
     )
-    
+
     for k in list(CURRENT_PARAMS.keys()):
         CURRENT_PARAMS[k] = None
     PENDING_ADDS.clear()
     STATE["selected_parts"] = []
     HISTORY[:] = [{k: None for k in CURRENT_PARAMS.keys()}]
     H_PTR = -1
-    
+
     # Try to rebuild GLB
     try:
         from run import _rebuild_and_save_glb
+
         _rebuild_and_save_glb()
     except Exception as e:
         import logging
+
         logging.warning("reset: rebuild failed: %s", e)
-    
+
     return {
         "ok": True,
         "current": snapshot_global(),
@@ -152,9 +171,15 @@ def reset_state() -> Dict[str, Any]:
 def cad_state_json() -> Dict[str, Any]:
     """Get current CAD state as JSON."""
     from run import (
-        CURRENT_PARAMS, CONTEXT, HISTORY, H_PTR, STATE, 
-        PENDING_ADDS, COMPONENT_REGISTRY
+        CURRENT_PARAMS,
+        CONTEXT,
+        HISTORY,
+        H_PTR,
+        STATE,
+        PENDING_ADDS,
+        COMPONENT_REGISTRY,
     )
+
     return {
         "current_params": snapshot(CURRENT_PARAMS),
         "context": CONTEXT,
@@ -165,35 +190,49 @@ def cad_state_json() -> Dict[str, Any]:
     }
 
 
-def apply_changes(changes: List[dict], excerpt: Optional[str] = None) -> tuple[int, Dict[str, Any]]:
+def apply_changes(
+    changes: List[Dict[str, Any]], excerpt: Optional[str] = None
+) -> Tuple[int, Dict[str, Any]]:
     """
     Apply a list of changes to the CAD model.
-    
+
     This is a wrapper that calls apply_changes_list (the full implementation).
-    
+
     Returns:
         Tuple of (status_code, response_dict)
     """
     return apply_changes_list(changes, excerpt)
 
 
-def apply_changes_list(changes: List[dict], excerpt: Optional[str] = None) -> tuple[int, Dict[str, Any]]:
+def apply_changes_list(
+    changes: List[Dict[str, Any]], excerpt: Optional[str] = None
+) -> Tuple[int, Dict[str, Any]]:
     """
     Apply a list of changes to the CAD model.
     This is the full implementation that accesses globals from run.py.
-    
+
     Returns:
         Tuple of (status_code, response_dict)
     """
     from run import (
-        CURRENT_PARAMS, CONTEXT, HISTORY, H_PTR, PENDING_ADDS, STATE,
-        HIDDEN_PREFIXES, Rover, _Stepper, _Electronics, _PanTilt, _ThisWheel,
+        CURRENT_PARAMS,
+        CONTEXT,
+        HISTORY,
+        H_PTR,
+        PENDING_ADDS,
+        STATE,
+        HIDDEN_PREFIXES,
+        Rover,
+        _Stepper,
+        _Electronics,
+        _PanTilt,
+        _ThisWheel,
         _rebuild_and_save_glb,
-        _normalize_change
+        _normalize_change,
     )
     from app.core.component_registry import get_component_spec
     from app.utils.param_normalization import normalize_change
-    
+
     if not changes:
         return 400, {"ok": False, "error": "No change objects supplied"}
 
@@ -257,6 +296,7 @@ def apply_changes_list(changes: List[dict], excerpt: Optional[str] = None) -> tu
         # true add
         if action == "add" and comp and callable(comp.add_fn):
             from app.core.component_registry import ModelAdapter
+
             adapter = ModelAdapter(Rover)
             comp.add_fn(adapter=adapter, **params)
 

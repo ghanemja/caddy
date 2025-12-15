@@ -1,0 +1,6 @@
+{
+    "target": "partgen.models.diffusion.schedulers.FlowMatchEulerDiscreteScheduler",
+    "params": {
+        "num_train_timesteps": 1000
+    }
+}

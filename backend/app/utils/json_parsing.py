@@ -2,13 +2,14 @@
 JSON parsing utilities
 Functions for parsing JSON from VLM output and other text sources
 """
+
 import re
 import json
 import ast
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict, Any
 
 
-def extract_json_loose(text: str) -> Optional[dict]:
+def extract_json_loose(text: str) -> Optional[Dict[str, Any]]:
     """Extract JSON from text, trying multiple parsing strategies."""
     if not text:
         return None
@@ -65,7 +66,9 @@ def find_all_balanced_json_blocks(text: str) -> List[Tuple[int, int]]:
     return blocks
 
 
-def split_multi_json_and_summaries(raw_text: str) -> Tuple[Optional[List[dict]], List[str], List[str]]:
+def split_multi_json_and_summaries(
+    raw_text: str,
+) -> Tuple[Optional[List[Dict[str, Any]]], List[str], List[str]]:
     """
     Accepts model output that may contain multiple JSON objects/arrays (possibly fenced),
     followed by one or more SUMMARY: lines.
@@ -106,6 +109,7 @@ def split_multi_json_and_summaries(raw_text: str) -> Tuple[Optional[List[dict]],
     for block in blocks:
         # Normalize units inside JSON-like text (e.g. "2.5m" -> "2500")
         from app.utils.units import repair_units_in_json_text
+
         fixed_units = repair_units_in_json_text(block)
 
         # Be tolerant to single quotes / Python literals and None/True/False
@@ -146,4 +150,3 @@ def split_multi_json_and_summaries(raw_text: str) -> Tuple[Optional[List[dict]],
             parsed_changes.append(obj)
 
     return (parsed_changes or None), summaries, kept_blocks
-

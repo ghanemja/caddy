@@ -2,7 +2,8 @@
 Application State Management
 Runtime state variables for the application.
 """
-from typing import Dict, Any, Optional, List
+
+from typing import Dict, Any, Optional, List, Union
 
 # Runtime state - these change during application execution
 STATE: Dict[str, Any] = {"selected_parts": []}
@@ -36,6 +37,5 @@ _INGEST_RESULT_CACHE: Dict[str, Any] = {}
 INIT_SNAPSHOT: Optional[Dict[str, Optional[float]]] = None
 
 # queued ops for true geometry adds
-PENDING_ADDS: List[dict] = []
+PENDING_ADDS: List[Dict[str, Any]] = []
 HIDDEN_PREFIXES: List[str] = []
-

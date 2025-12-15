@@ -2,8 +2,9 @@
 Request parsing utilities
 Functions for parsing Flask request data into change objects
 """
+
 from flask import request
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Dict, Any
 from app.utils.param_normalization import (
     normalize_change,
     coerce_changes,
@@ -12,14 +13,14 @@ from app.utils.param_normalization import (
 from app.utils.json_parsing import split_multi_json_and_summaries
 
 
-def parse_apply_request() -> Tuple[List[dict], Optional[str]]:
+def parse_apply_request() -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """
     Robustly extracts a list[dict] of change objects from the request.
     Accepts:
       - JSON body with {changes: [...]} or {actions: [...]}
       - Raw text containing JSON
       - Plain natural language (fallback to intent_to_changes)
-    
+
     Returns:
       Tuple of (changes_list, excerpt_string)
     """
@@ -76,4 +77,3 @@ def parse_apply_request() -> Tuple[List[dict], Optional[str]]:
     if not changes:
         changes = intent_to_changes(raw_body)
     return changes, None
-

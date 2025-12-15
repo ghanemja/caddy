@@ -1,0 +1,30 @@
+{
+    "target": "partgen.models.partformer_dit.PartFormerDITPlain",
+    "params": {
+        "use_self_attention": true,
+        "use_cross_attention": true,
+        "use_cross_attention_2": true,
+        "use_bbox_cond": false,
+        "num_freqs": 8,
+        "use_part_embed": true,
+        "valid_num": 50,
+        "input_size": 1024,
+        "in_channels": 64,
+        "hidden_size": 2048,
+        "encoder_hidden_dim": 1024,
+        "encoder_hidden2_dim": 1024,
+        "depth": 21,
+        "num_heads": 16,
+        "qk_norm": true,
+        "qkv_bias": false,
+        "qk_norm_type": "rms",
+        "with_decoupled_ca": false,
+        "decoupled_ca_dim": 4096,
+        "decoupled_ca_weight": 1.0,
+        "use_attention_pooling": false,
+        "use_pos_emb": false,
+        "num_moe_layers": 6,
+        "num_experts": 8,
+        "moe_top_k": 2
+    }
+}
