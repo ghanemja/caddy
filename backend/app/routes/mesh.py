@@ -256,15 +256,113 @@ def ingest_mesh_segment():
             mesh = mesh.dump(concatenate=True)
         vertices = np.array(mesh.vertices, dtype=np.float32)
 
-        # Map point labels to vertex labels (approximate)
-        vertex_labels = seg_result.labels
-        if len(vertex_labels) != len(vertices):
-            if len(vertex_labels) < len(vertices):
-                vertex_labels = np.pad(
-                    vertex_labels, (0, len(vertices) - len(vertex_labels)), mode="edge"
+        # Store original vertex count for comparison after unmerging
+        original_mesh_vertex_count = len(mesh.vertices)
+
+        # Re-calculate vertex_labels using point cloud segmentation (known-good data)
+        # Use nearest-neighbor lookup to map point cloud labels to mesh vertices
+        try:
+            from scipy.spatial import cKDTree
+
+            # Create cKDTree from segmented point cloud
+            points_array = np.array(points, dtype=np.float32)
+            labels_array = np.array(labels, dtype=np.int32)
+
+            print(
+                f"[ingest_mesh_segment] Mapping {len(points_array)} point cloud labels to {len(vertices)} mesh vertices using nearest-neighbor lookup"
+            )
+
+            # Build KD-tree from point cloud
+            tree = cKDTree(points_array)
+
+            # Query mesh vertices to find nearest point cloud point for each vertex
+            _, nearest_point_indices = tree.query(vertices, k=1)
+
+            # Handle case where query returns 2D array (for k>1) or scalar (for single query)
+            if nearest_point_indices.ndim > 1:
+                nearest_point_indices = nearest_point_indices.flatten()
+            elif np.isscalar(nearest_point_indices):
+                nearest_point_indices = np.array([nearest_point_indices])
+
+            # Assign labels from nearest point cloud points to mesh vertices
+            vertex_labels = labels_array[nearest_point_indices]
+
+            # Debug: Calculate and compare label distributions
+            # 1. Distribution of unique labels in source (point cloud)
+            unique_labels_pc, counts_pc = np.unique(labels_array, return_counts=True)
+            label_distribution_pc = dict(zip(unique_labels_pc, counts_pc))
+
+            # 2. Distribution of unique labels in target (mesh)
+            unique_labels_mesh, counts_mesh = np.unique(
+                vertex_labels, return_counts=True
+            )
+            label_distribution_mesh = dict(zip(unique_labels_mesh, counts_mesh))
+
+            # 3. Print both distributions
+            print(
+                f"[ingest_mesh_segment] Point cloud label distribution: {len(unique_labels_pc)} unique labels"
+            )
+            for label_id, count in sorted(label_distribution_pc.items()):
+                pct = (count / len(labels_array)) * 100
+                print(
+                    f"[ingest_mesh_segment]   • Label {label_id}: {count} points ({pct:.1f}%)"
                 )
-            else:
-                vertex_labels = vertex_labels[: len(vertices)]
+
+            print(
+                f"[ingest_mesh_segment] Mesh vertex label distribution: {len(unique_labels_mesh)} unique labels"
+            )
+            for label_id, count in sorted(label_distribution_mesh.items()):
+                pct = (count / len(vertex_labels)) * 100
+                print(
+                    f"[ingest_mesh_segment]   • Label {label_id}: {count} vertices ({pct:.1f}%)"
+                )
+
+            # 4. Check if mapping failed (mesh has only 1 label but point cloud has multiple)
+            num_unique_pc = len(unique_labels_pc)
+            num_unique_mesh = len(unique_labels_mesh)
+            if num_unique_mesh == 1 and num_unique_pc > 1:
+                print(
+                    f"[ingest_mesh_segment] ⚠ WARNING: Label mapping may have failed! "
+                    f"Point cloud has {num_unique_pc} unique labels but mesh only has {num_unique_mesh} unique label. "
+                    f"This suggests the KDTree mapping did not preserve label diversity.",
+                    flush=True,
+                )
+
+            print(
+                f"[ingest_mesh_segment] ✓ Mapped vertex labels: {len(vertex_labels)} vertices, {len(np.unique(vertex_labels))} unique labels"
+            )
+
+        except ImportError:
+            # Fallback if scipy not available: use simple assignment (less accurate)
+            print(
+                "[ingest_mesh_segment] ⚠ Warning: scipy.spatial.cKDTree not available, using fallback label mapping"
+            )
+            vertex_labels = seg_result.labels
+            if len(vertex_labels) != len(vertices):
+                if len(vertex_labels) < len(vertices):
+                    vertex_labels = np.pad(
+                        vertex_labels,
+                        (0, len(vertices) - len(vertex_labels)),
+                        mode="edge",
+                    )
+                else:
+                    vertex_labels = vertex_labels[: len(vertices)]
+        except Exception as e:
+            # Fallback on any error
+            print(
+                f"[ingest_mesh_segment] ⚠ Warning: Error in nearest-neighbor label mapping: {e}, using fallback",
+                flush=True,
+            )
+            vertex_labels = seg_result.labels
+            if len(vertex_labels) != len(vertices):
+                if len(vertex_labels) < len(vertices):
+                    vertex_labels = np.pad(
+                        vertex_labels,
+                        (0, len(vertices) - len(vertex_labels)),
+                        mode="edge",
+                    )
+                else:
+                    vertex_labels = vertex_labels[: len(vertices)]
 
         # Build PartTable with preliminary names from segmentation
         part_table = build_part_table_from_segmentation(
@@ -279,13 +377,722 @@ def ingest_mesh_segment():
             f"[ingest_mesh_segment] ✓ PartTable created with {len(part_table.parts)} parts for user labeling"
         )
 
+        # Helper function to generate a fixed, distinct color palette
+        def get_color_palette(n_classes):
+            """
+            Generate a fixed, distinct set of RGB colors for segmentation.
+            Uses a deterministic approach to ensure consistency across point cloud and mesh.
+
+            Args:
+                n_classes: Number of distinct colors needed
+
+            Returns:
+                Dictionary mapping class_id (0 to n_classes-1) -> RGB color array [R, G, B] in [0, 255]
+            """
+            try:
+                # Try using matplotlib's colormaps for better color distinction
+                import matplotlib.cm as cm
+
+                # Use tab20 for up to 20 classes, then cycle or use Set3
+                if n_classes <= 20:
+                    # Use get_cmap for older matplotlib, or direct access for newer
+                    try:
+                        colormap = cm.get_cmap("tab20")
+                    except AttributeError:
+                        colormap = cm.tab20
+                    colors = [colormap(i / 20.0)[:3] for i in range(n_classes)]
+                elif n_classes <= 40:
+                    # Combine tab20 and Set3 for more classes
+                    try:
+                        colormap1 = cm.get_cmap("tab20")
+                        colormap2 = cm.get_cmap("Set3")
+                    except AttributeError:
+                        colormap1 = cm.tab20
+                        colormap2 = cm.Set3
+                    colors1 = [colormap1(i / 20.0)[:3] for i in range(20)]
+                    colors2 = [
+                        colormap2(i / (n_classes - 20.0))[:3]
+                        for i in range(n_classes - 20)
+                    ]
+                    colors = colors1 + colors2
+                else:
+                    # For many classes, use a cyclic colormap
+                    try:
+                        colormap = cm.get_cmap("tab20")
+                    except AttributeError:
+                        colormap = cm.tab20
+                    colors = [colormap((i % 20) / 20.0)[:3] for i in range(n_classes)]
+
+                # Create palette dictionary
+                palette = {
+                    i: (np.array(colors[i]) * 255).astype(np.uint8)
+                    for i in range(n_classes)
+                }
+            except ImportError:
+                # Fallback: Use golden angle HSL approach (deterministic, no matplotlib needed)
+                import colorsys
+
+                palette = {}
+                for i in range(n_classes):
+                    # Use golden angle for color distribution (deterministic)
+                    hue = (i * 137.508) % 360
+                    # Convert HSL to RGB: colorsys.hls_to_rgb(h, l, s) where h in [0,1], l in [0,1], s in [0,1]
+                    rgb = colorsys.hls_to_rgb(hue / 360.0, 0.65, 0.8)
+                    # Convert from [0,1] to [0,255] for trimesh vertex colors
+                    palette[i] = (np.array(rgb) * 255).astype(np.uint8)
+
+            return palette
+
+        # Apply colors to mesh vertices and export colored mesh as GLB
+        try:
+            import colorsys
+
+            # Ensure vertex_labels match mesh.vertices length
+            if len(vertex_labels) != len(mesh.vertices):
+                if len(vertex_labels) < len(mesh.vertices):
+                    vertex_labels = np.pad(
+                        vertex_labels,
+                        (0, len(mesh.vertices) - len(vertex_labels)),
+                        mode="edge",
+                    )
+                else:
+                    vertex_labels = vertex_labels[: len(mesh.vertices)]
+
+            print(
+                f"[ingest_mesh_segment] Vertex labels length: {len(vertex_labels)}, Mesh vertices length: {len(mesh.vertices)}"
+            )
+
+            # Step 1: Unmerge all vertices so no vertices are shared between faces
+            # This ensures sharp boundaries by giving each face its own independent vertices
+            def unmerge_all_vertices(mesh_obj):
+                """
+                Duplicate all vertices so each face has its own independent vertices.
+                This prevents any vertex sharing between faces.
+
+                Args:
+                    mesh_obj: trimesh.Trimesh object
+
+                Returns:
+                    new_mesh: trimesh.Trimesh with unmerged vertices (one vertex per face corner)
+                """
+                faces = mesh_obj.faces
+                vertices_orig = mesh_obj.vertices
+
+                # Create new vertices: one copy per face corner
+                new_vertices = []
+                new_faces = []
+
+                for face in faces:
+                    # For each face, create new vertex copies
+                    face_vertex_indices = []
+                    for orig_v_idx in face:
+                        new_v_idx = len(new_vertices)
+                        new_vertices.append(vertices_orig[orig_v_idx])
+                        face_vertex_indices.append(new_v_idx)
+                    new_faces.append(face_vertex_indices)
+
+                # Create new mesh with unmerged vertices
+                new_mesh = trimesh.Trimesh(
+                    vertices=np.array(new_vertices),
+                    faces=np.array(new_faces),
+                    process=False,  # Don't process, we've already handled vertex unmerging
+                )
+
+                return new_mesh
+
+            # Unmerge all vertices (no sharing between faces)
+            mesh_unmerged = unmerge_all_vertices(mesh)
+
+            print(
+                f"[ingest_mesh_segment] Unmerged vertices: {len(mesh.vertices)} -> {len(mesh_unmerged.vertices)} vertices"
+            )
+
+            # Step 2: Re-run KDTree mapping on unmerged mesh vertices
+            # Since unmerging changed the vertex count, we need to map labels from point cloud again
+            try:
+                from scipy.spatial import cKDTree
+
+                # Create cKDTree from segmented point cloud (reuse from earlier)
+                points_array = np.array(points, dtype=np.float32)
+                labels_array = np.array(labels, dtype=np.int32)
+
+                print(
+                    f"[ingest_mesh_segment] Re-mapping {len(points_array)} point cloud labels to {len(mesh_unmerged.vertices)} unmerged mesh vertices"
+                )
+
+                # Build KD-tree from point cloud
+                tree = cKDTree(points_array)
+
+                # Query unmerged mesh vertices to find nearest point cloud point
+                unmerged_vertices = np.array(mesh_unmerged.vertices, dtype=np.float32)
+                _, nearest_point_indices = tree.query(unmerged_vertices, k=1)
+
+                # Handle case where query returns 2D array or scalar
+                if nearest_point_indices.ndim > 1:
+                    nearest_point_indices = nearest_point_indices.flatten()
+                elif np.isscalar(nearest_point_indices):
+                    nearest_point_indices = np.array([nearest_point_indices])
+
+                # Assign labels from nearest point cloud points to unmerged mesh vertices
+                vertex_labels = labels_array[nearest_point_indices]
+
+                print(
+                    f"[ingest_mesh_segment] ✓ Re-mapped vertex labels: {len(vertex_labels)} vertices, {len(np.unique(vertex_labels))} unique labels"
+                )
+
+            except ImportError:
+                # Fallback if scipy not available: use original labels (less accurate)
+                print(
+                    "[ingest_mesh_segment] ⚠ Warning: scipy.spatial.cKDTree not available, using original labels (may be inaccurate after unmerging)"
+                )
+                # This fallback is not ideal since vertex count changed, but better than crashing
+                # Pad or truncate original labels to match new vertex count
+                if len(vertex_labels) < len(mesh_unmerged.vertices):
+                    vertex_labels = np.pad(
+                        vertex_labels,
+                        (0, len(mesh_unmerged.vertices) - len(vertex_labels)),
+                        mode="edge",
+                    )
+                else:
+                    vertex_labels = vertex_labels[: len(mesh_unmerged.vertices)]
+            except Exception as e:
+                # Fallback on any error
+                print(
+                    f"[ingest_mesh_segment] ⚠ Warning: Error in re-mapping labels after unmerging: {e}, using fallback",
+                    flush=True,
+                )
+                # Pad or truncate original labels to match new vertex count
+                if len(vertex_labels) < len(mesh_unmerged.vertices):
+                    vertex_labels = np.pad(
+                        vertex_labels,
+                        (0, len(mesh_unmerged.vertices) - len(vertex_labels)),
+                        mode="edge",
+                    )
+                else:
+                    vertex_labels = vertex_labels[: len(mesh_unmerged.vertices)]
+
+            # Use the unmerged mesh for coloring
+            mesh = mesh_unmerged
+
+            # Generate consistent color palette for unique label IDs using shared function
+            unique_label_ids = np.unique(vertex_labels)
+            num_unique_labels = len(unique_label_ids)
+
+            # Get color palette for the number of unique labels
+            color_palette = get_color_palette(num_unique_labels)
+
+            # Map label IDs to colors (label IDs may not be contiguous 0..n-1)
+            # Create a mapping from actual label IDs to palette indices
+            sorted_label_ids = np.sort(unique_label_ids)
+            label_id_to_color = {}
+            for palette_idx, label_id in enumerate(sorted_label_ids):
+                label_id_int = int(label_id)
+                # Use palette index to get color (ensures consistent colors)
+                label_id_to_color[label_id_int] = color_palette[palette_idx]
+
+            # Step 3: Apply colors to unmerged mesh vertices based on re-mapped labels
+            vertex_colors = np.zeros((len(mesh.vertices), 3), dtype=np.uint8)
+            for i, label_id in enumerate(vertex_labels):
+                label_id_int = int(label_id)
+                vertex_colors[i] = label_id_to_color.get(
+                    label_id_int, np.array([136, 136, 136], dtype=np.uint8)
+                )  # Default gray for unmapped labels
+
+            mesh.visual.vertex_colors = vertex_colors
+
+            print(
+                f"[ingest_mesh_segment] ✓ Applied vertex colors to unmerged mesh: {len(vertex_colors)} vertices"
+            )
+
+            # Create separate sub-meshes for each label and export as Scene
+            # Step 1: Determine which part each face belongs to (majority vote of vertex labels)
+            face_labels = np.zeros(len(mesh.faces), dtype=np.int32)
+            for face_idx, face in enumerate(mesh.faces):
+                face_vertex_labels = [vertex_labels[v_idx] for v_idx in face]
+                # Use the most common label (mode)
+                face_labels[face_idx] = int(np.bincount(face_vertex_labels).argmax())
+
+            # Step 2: Group faces by label ID
+            faces_by_label = {}
+            for face_idx, label_id in enumerate(face_labels):
+                label_id_int = int(label_id)
+                if label_id_int not in faces_by_label:
+                    faces_by_label[label_id_int] = []
+                faces_by_label[label_id_int].append(face_idx)
+
+            print(
+                f"[ingest_mesh_segment] Creating {len(faces_by_label)} separate sub-meshes for parts"
+            )
+
+            # Step 3: Create a sub-mesh for each label and add to Scene
+            scene = trimesh.Scene()
+            for label_id_int, face_indices in faces_by_label.items():
+                # Skip if no faces for this label
+                if len(face_indices) == 0:
+                    print(
+                        f"[ingest_mesh_segment] Warning: Label {label_id_int} has no faces, skipping"
+                    )
+                    continue
+
+                try:
+                    # Create sub-mesh using trimesh.submesh
+                    # submesh returns a list of meshes (one per connected component)
+                    submesh_list = mesh.submesh([face_indices], append=False)
+
+                    # Get the color for this label
+                    part_color = label_id_to_color.get(
+                        label_id_int, np.array([136, 136, 136], dtype=np.uint8)
+                    )
+
+                    # Add each connected component as a separate geometry in the scene
+                    for submesh_idx, part_mesh in enumerate(submesh_list):
+                        # Apply uniform color to this sub-mesh (as face colors for uniform appearance)
+                        if hasattr(part_mesh.visual, "face_colors"):
+                            # Apply color to all faces uniformly
+                            part_mesh.visual.face_colors = np.tile(
+                                part_color, (len(part_mesh.faces), 1)
+                            )
+                        elif hasattr(part_mesh.visual, "vertex_colors"):
+                            # Fallback: apply to vertices if face colors not available
+                            part_mesh.visual.vertex_colors = np.tile(
+                                part_color, (len(part_mesh.vertices), 1)
+                            )
+
+                        # Add to scene with a unique node name
+                        node_name = (
+                            f"part_{label_id_int}"
+                            if submesh_idx == 0
+                            else f"part_{label_id_int}_{submesh_idx}"
+                        )
+                        scene.add_geometry(part_mesh, node_name=node_name)
+
+                    print(
+                        f"[ingest_mesh_segment] Created sub-mesh for label {label_id_int}: {len(face_indices)} faces, {len(submesh_list)} connected components"
+                    )
+                except Exception as e:
+                    print(
+                        f"[ingest_mesh_segment] Error creating sub-mesh for label {label_id_int}: {e}",
+                        flush=True,
+                    )
+                    continue
+
+            # Step 4: Export Scene as GLB
+            if len(scene.geometry) == 0:
+                raise ValueError(
+                    "No valid sub-meshes were created. Cannot export empty scene."
+                )
+
+            # Log vertex counts before export to confirm unmerging was successful
+            total_unmerged_vertices = sum(
+                len(geom.vertices) for geom in scene.geometry.values()
+            )
+            print(
+                f"[ingest_mesh_segment] Before GLB export: Original mesh had {original_mesh_vertex_count} vertices, "
+                f"unmerged scene has {total_unmerged_vertices} total vertices across {len(scene.geometry)} sub-meshes "
+                f"(unmerging successful: {total_unmerged_vertices} > {original_mesh_vertex_count})"
+            )
+
+            colored_mesh_path = os.path.join(temp_dir, "segmentation_colored.glb")
+            # Export scene as GLB - trimesh.export() does not re-merge vertices by default
+            # No process=True or merge flags needed - the unmerged vertices are preserved
+            # file_type is inferred from .glb extension, no additional parameters needed
+            scene.export(colored_mesh_path, file_type="glb")
+
+            # Verify file was created and has size
+            if not os.path.exists(colored_mesh_path):
+                raise FileNotFoundError(
+                    f"GLB file was not created at {colored_mesh_path}"
+                )
+            file_size = os.path.getsize(colored_mesh_path)
+            if file_size == 0:
+                raise ValueError(
+                    f"GLB file was created but is empty: {colored_mesh_path}"
+                )
+
+            print(
+                f"[ingest_mesh_segment] ✓ Scene with {len(scene.geometry)} sub-meshes exported to: {colored_mesh_path} ({file_size} bytes)"
+            )
+            segmentation_summary["colored_mesh_path"] = colored_mesh_path
+
+        except Exception as e:
+            print(
+                f"[ingest_mesh_segment] Warning: Could not create colored mesh GLB: {e}",
+                flush=True,
+            )
+            import traceback
+
+            traceback.print_exc()
+            segmentation_summary["colored_mesh_path"] = None
+
+        # Color the mesh with segmentation colors and export as GLB (advanced splitting version)
+        try:
+            import colorsys
+
+            # Utility function to split vertices at part boundaries for crisp coloring
+            def split_vertices_by_parts(mesh_obj, vertex_part_labels):
+                """
+                Split vertices at part boundaries to prevent color interpolation.
+
+                For vertices shared between faces of different parts, create separate
+                vertex instances so each face can have its own color without blur.
+
+                Args:
+                    mesh_obj: trimesh.Trimesh object
+                    vertex_part_labels: array of part IDs for each vertex
+
+                Returns:
+                    New trimesh.Trimesh with split vertices
+                """
+                faces = mesh_obj.faces
+                vertices_orig = mesh_obj.vertices
+
+                # Step 1: Determine which part each face belongs to
+                # Use majority vote: a face belongs to the part that most of its vertices belong to
+                face_part_labels = np.zeros(len(faces), dtype=np.int32)
+                for face_idx, face in enumerate(faces):
+                    face_vertex_labels = [vertex_part_labels[v_idx] for v_idx in face]
+                    # Use the most common label (mode)
+                    face_part_labels[face_idx] = int(
+                        np.bincount(face_vertex_labels).argmax()
+                    )
+
+                # Step 2: Build mapping: vertex -> set of face parts that use it
+                # A vertex needs to be split if it's used by faces from different parts
+                vertex_to_face_parts = {}
+                for face_idx, face in enumerate(faces):
+                    face_part = face_part_labels[face_idx]
+                    for v_idx in face:
+                        if v_idx not in vertex_to_face_parts:
+                            vertex_to_face_parts[v_idx] = set()
+                        vertex_to_face_parts[v_idx].add(face_part)
+
+                # Step 3: Create new vertex mapping
+                # For each original vertex, create one copy per face part that uses it
+                # Each copy will have the color of the face part that uses it
+                vertex_mapping = {}  # (original_v_idx, face_part_id) -> new_v_idx
+                new_vertices = []
+                new_vertex_part_labels = (
+                    []
+                )  # Track part ID for each new vertex (for coloring)
+
+                for orig_v_idx, face_parts_using_vertex in vertex_to_face_parts.items():
+                    if len(face_parts_using_vertex) == 1:
+                        # Vertex is only used by faces from one part - no need to split
+                        face_part_id = list(face_parts_using_vertex)[0]
+                        new_v_idx = len(new_vertices)
+                        vertex_mapping[(orig_v_idx, face_part_id)] = new_v_idx
+                        new_vertices.append(vertices_orig[orig_v_idx])
+                        # Use the face part for color (faces determine the color)
+                        new_vertex_part_labels.append(face_part_id)
+                    else:
+                        # Vertex is shared between faces from multiple parts - create copies
+                        for face_part_id in face_parts_using_vertex:
+                            new_v_idx = len(new_vertices)
+                            vertex_mapping[(orig_v_idx, face_part_id)] = new_v_idx
+                            new_vertices.append(vertices_orig[orig_v_idx])
+                            # Use the face part for color
+                            new_vertex_part_labels.append(face_part_id)
+
+                # Step 4: Update faces to use the appropriate vertex copies
+                new_faces = []
+                for face_idx, face in enumerate(faces):
+                    face_part = face_part_labels[face_idx]
+                    new_face = [
+                        vertex_mapping[(orig_v_idx, face_part)] for orig_v_idx in face
+                    ]
+                    new_faces.append(new_face)
+
+                # Step 5: Create new mesh with split vertices
+                new_mesh = trimesh.Trimesh(
+                    vertices=np.array(new_vertices),
+                    faces=np.array(new_faces),
+                    process=False,  # Don't process, we've already handled vertex splitting
+                )
+
+                return new_mesh, np.array(new_vertex_part_labels, dtype=np.int32)
+
+            # Use the shared color palette function for consistency
+            # Get unique part IDs from PartTable (more reliable than raw vertex_labels)
+            unique_part_ids = list(part_table.parts.keys())
+            num_unique_parts = len(unique_part_ids)
+
+            # Get color palette for the number of unique parts
+            color_palette_parts = get_color_palette(num_unique_parts)
+
+            # Map part IDs to colors (same mapping logic as other exports)
+            sorted_part_ids = sorted(unique_part_ids)
+            part_id_to_color = {}
+            for palette_idx, part_id in enumerate(sorted_part_ids):
+                part_id_int = int(part_id)
+                # Use palette index to get color (ensures consistent colors)
+                part_id_to_color[part_id_int] = color_palette_parts[palette_idx]
+
+            # Split vertices at part boundaries to get crisp edges
+            vertex_part_labels = part_table.vertex_part_labels
+            mesh_split, vertex_part_labels_split = split_vertices_by_parts(
+                mesh, vertex_part_labels
+            )
+
+            print(
+                f"[ingest_mesh_segment] Split vertices: {len(mesh.vertices)} -> {len(mesh_split.vertices)} vertices"
+            )
+
+            # Create separate sub-meshes for each part by splitting the mesh by label
+            # Step 1: Determine which part each face belongs to (majority vote of vertex labels)
+            face_part_labels = np.zeros(len(mesh_split.faces), dtype=np.int32)
+            for face_idx, face in enumerate(mesh_split.faces):
+                face_vertex_labels = [vertex_part_labels_split[v_idx] for v_idx in face]
+                # Use the most common label (mode) - all vertices should have the same label after splitting, but use mode for safety
+                face_part_labels[face_idx] = int(
+                    np.bincount(face_vertex_labels).argmax()
+                )
+
+            # Step 2: Group faces by part ID
+            faces_by_part = {}
+            for face_idx, part_id in enumerate(face_part_labels):
+                part_id_int = int(part_id)
+                if part_id_int not in faces_by_part:
+                    faces_by_part[part_id_int] = []
+                faces_by_part[part_id_int].append(face_idx)
+
+            print(
+                f"[ingest_mesh_segment] Creating {len(faces_by_part)} separate sub-meshes for parts"
+            )
+
+            # Step 3: Create a sub-mesh for each part
+            scene_meshes = []
+            for part_id_int, face_indices in faces_by_part.items():
+                # Skip if no faces for this part
+                if len(face_indices) == 0:
+                    print(
+                        f"[ingest_mesh_segment] Warning: Part {part_id_int} has no faces, skipping"
+                    )
+                    continue
+
+                # Extract faces for this part
+                part_faces = mesh_split.faces[face_indices]
+
+                # Validate that we have valid faces
+                if len(part_faces) == 0:
+                    print(
+                        f"[ingest_mesh_segment] Warning: Part {part_id_int} has empty face array, skipping"
+                    )
+                    continue
+
+                # Find unique vertices used by these faces
+                unique_vertex_indices = np.unique(part_faces.flatten())
+                if len(unique_vertex_indices) == 0:
+                    print(
+                        f"[ingest_mesh_segment] Warning: Part {part_id_int} has no vertices, skipping"
+                    )
+                    continue
+
+                vertex_map = {
+                    old_idx: new_idx
+                    for new_idx, old_idx in enumerate(unique_vertex_indices)
+                }
+
+                # Remap face indices to use the new vertex indices
+                remapped_faces = np.array(
+                    [[vertex_map[v_idx] for v_idx in face] for face in part_faces]
+                )
+
+                # Extract vertices for this sub-mesh
+                part_vertices = mesh_split.vertices[unique_vertex_indices]
+
+                # Validate vertices
+                if len(part_vertices) == 0:
+                    print(
+                        f"[ingest_mesh_segment] Warning: Part {part_id_int} has no vertices after extraction, skipping"
+                    )
+                    continue
+
+                # Create sub-mesh
+                try:
+                    part_mesh = trimesh.Trimesh(
+                        vertices=part_vertices, faces=remapped_faces, process=False
+                    )
+
+                    # Validate the mesh is valid
+                    if not part_mesh.is_valid or len(part_mesh.faces) == 0:
+                        print(
+                            f"[ingest_mesh_segment] Warning: Part {part_id_int} mesh is invalid or has no faces, skipping"
+                        )
+                        continue
+
+                    # Apply color to this sub-mesh (as vertex colors)
+                    part_color = part_id_to_color.get(
+                        part_id_int, np.array([136, 136, 136], dtype=np.uint8)
+                    )
+                    part_mesh.visual.vertex_colors = np.tile(
+                        part_color, (len(part_vertices), 1)
+                    )
+
+                    # Add to scene with a name for identification
+                    scene_meshes.append((f"part_{part_id_int}", part_mesh))
+                    print(
+                        f"[ingest_mesh_segment] Created sub-mesh for part {part_id_int}: {len(part_faces)} faces, {len(part_vertices)} vertices"
+                    )
+                except Exception as e:
+                    print(
+                        f"[ingest_mesh_segment] Error creating sub-mesh for part {part_id_int}: {e}",
+                        flush=True,
+                    )
+                    continue
+
+            # Step 4: Create a Scene containing all sub-meshes
+            colored_glb_path = os.path.join(temp_dir, "segmentation_colored.glb")
+
+            # Prepare vertex colors for fallback (single mesh export)
+            vertex_colors_fallback = np.zeros(
+                (len(mesh_split.vertices), 3), dtype=np.uint8
+            )
+            for i, part_id in enumerate(vertex_part_labels_split):
+                part_id_int = int(part_id)
+                vertex_colors_fallback[i] = part_id_to_color.get(
+                    part_id_int, np.array([136, 136, 136], dtype=np.uint8)
+                )  # Default gray
+
+            if len(scene_meshes) == 0:
+                print(
+                    "[ingest_mesh_segment] ⚠ Warning: No valid sub-meshes were created. "
+                    "Falling back to single colored mesh export."
+                )
+                # Fallback: export the split mesh with vertex colors as a single mesh
+                mesh_split.visual.vertex_colors = vertex_colors_fallback
+                # Log vertex count before export to confirm unmerging was successful
+                print(
+                    f"[ingest_mesh_segment] Before fallback GLB export: Original mesh had {original_mesh_vertex_count} vertices, "
+                    f"split mesh has {len(mesh_split.vertices)} vertices "
+                    f"(unmerging successful: {len(mesh_split.vertices)} > {original_mesh_vertex_count})"
+                )
+                # Export mesh as GLB - trimesh.export() does not re-merge vertices by default
+                # No process=True or merge flags needed - the unmerged vertices are preserved
+                # file_type is inferred from .glb extension, no additional parameters needed
+                mesh_split.export(colored_glb_path, file_type="glb")
+            else:
+                scene = trimesh.Scene()
+                for mesh_name, part_mesh in scene_meshes:
+                    scene.add_geometry(part_mesh, node_name=mesh_name)
+
+                # Validate scene has geometry before export
+                if len(scene.geometry) == 0:
+                    print(
+                        "[ingest_mesh_segment] ⚠ Warning: Scene has no geometry. "
+                        "Falling back to single colored mesh export."
+                    )
+                    # Fallback: export the split mesh with vertex colors as a single mesh
+                    mesh_split.visual.vertex_colors = vertex_colors_fallback
+                    # Log vertex count before export to confirm unmerging was successful
+                    print(
+                        f"[ingest_mesh_segment] Before fallback GLB export: Original mesh had {original_mesh_vertex_count} vertices, "
+                        f"split mesh has {len(mesh_split.vertices)} vertices "
+                        f"(unmerging successful: {len(mesh_split.vertices)} > {original_mesh_vertex_count})"
+                    )
+                    # Export mesh as GLB - trimesh.export() does not re-merge vertices by default
+                    mesh_split.export(colored_glb_path)
+                else:
+                    try:
+                        # Log vertex counts before export to confirm unmerging was successful
+                        total_unmerged_vertices_advanced = sum(
+                            len(geom.vertices) for geom in scene.geometry.values()
+                        )
+                        print(
+                            f"[ingest_mesh_segment] Before advanced GLB export: Original mesh had {original_mesh_vertex_count} vertices, "
+                            f"unmerged scene has {total_unmerged_vertices_advanced} total vertices across {len(scene.geometry)} sub-meshes "
+                            f"(unmerging successful: {total_unmerged_vertices_advanced} > {original_mesh_vertex_count})"
+                        )
+                        # Export scene as GLB - trimesh.export() does not re-merge vertices by default
+                        # No process=True or merge flags needed - the unmerged vertices are preserved
+                        # file_type is inferred from .glb extension, no additional parameters needed
+                        scene.export(colored_glb_path, file_type="glb")
+
+                        # Verify file was created and has size
+                        if not os.path.exists(colored_glb_path):
+                            raise FileNotFoundError(
+                                f"GLB file was not created at {colored_glb_path}"
+                            )
+                        file_size = os.path.getsize(colored_glb_path)
+                        if file_size == 0:
+                            raise ValueError(
+                                f"GLB file was created but is empty: {colored_glb_path}"
+                            )
+
+                        print(
+                            f"[ingest_mesh_segment] ✓ Split mesh with {len(scene_meshes)} parts exported to: {colored_glb_path} ({file_size} bytes)"
+                        )
+                    except Exception as scene_export_error:
+                        print(
+                            f"[ingest_mesh_segment] ⚠ Warning: Scene export failed: {scene_export_error}. "
+                            "Falling back to single colored mesh export.",
+                            flush=True,
+                        )
+                        # Fallback: export the split mesh with vertex colors as a single mesh
+                        mesh_split.visual.vertex_colors = vertex_colors_fallback
+                        # Log vertex count before export to confirm unmerging was successful
+                        print(
+                            f"[ingest_mesh_segment] Before error fallback GLB export: Original mesh had {original_mesh_vertex_count} vertices, "
+                            f"split mesh has {len(mesh_split.vertices)} vertices "
+                            f"(unmerging successful: {len(mesh_split.vertices)} > {original_mesh_vertex_count})"
+                        )
+                        # Export mesh as GLB - trimesh.export() does not re-merge vertices by default
+                        # file_type is inferred from .glb extension, no additional parameters needed
+                        mesh_split.export(colored_glb_path, file_type="glb")
+
+            # Final verification
+            if not os.path.exists(colored_glb_path):
+                raise FileNotFoundError(
+                    f"GLB file was not created at {colored_glb_path}"
+                )
+            file_size = os.path.getsize(colored_glb_path)
+            if file_size == 0:
+                raise ValueError(
+                    f"GLB file was created but is empty: {colored_glb_path}"
+                )
+
+            segmentation_summary["colored_mesh_path"] = colored_glb_path
+
+        except Exception as e:
+            print(
+                f"[ingest_mesh_segment] Warning: Could not create colored mesh GLB: {e}",
+                flush=True,
+            )
+            import traceback
+
+            traceback.print_exc()
+            segmentation_summary["colored_mesh_path"] = None
+
         # Save colored point cloud visualization
         try:
+            # Use the same color palette function as mesh export for consistency
+            unique_label_ids_pc = np.unique(labels)
+            num_unique_labels_pc = len(unique_label_ids_pc)
+
+            # Get color palette for the number of unique labels
+            color_palette_pc = get_color_palette(num_unique_labels_pc)
+
+            # Map label IDs to colors (same mapping logic as mesh)
+            sorted_label_ids_pc = np.sort(unique_label_ids_pc)
+            label_id_to_color_pc = {}
+            for palette_idx, label_id in enumerate(sorted_label_ids_pc):
+                label_id_int = int(label_id)
+                # Use palette index to get color (ensures consistent colors)
+                # Convert from [0,255] to [0,1] for point cloud (trimesh expects [0,1] for PointCloud colors)
+                label_id_to_color_pc[label_id_int] = (
+                    color_palette_pc[palette_idx] / 255.0
+                )
+
+            # Apply colors to point cloud
             colors = np.zeros((len(points), 3))
             for i, label_id in enumerate(labels):
-                np.random.seed(int(label_id))
-                color = np.random.rand(3)
-                colors[i] = color
+                label_id_int = int(label_id)
+                colors[i] = label_id_to_color_pc.get(
+                    label_id_int,
+                    np.array(
+                        [0.533, 0.533, 0.533]
+                    ),  # Default gray [0.533, 0.533, 0.533] ≈ [136, 136, 136]/255
+                )
+
             pc = trimesh.PointCloud(vertices=points, colors=colors)
             viz_path = os.path.join(temp_dir, "segmentation_colored.ply")
             pc.export(viz_path)
@@ -326,6 +1133,104 @@ def ingest_mesh_segment():
 
         error_msg = f"Mesh segmentation error: {str(e)}"
         print(f"[ingest_mesh_segment] {error_msg}", flush=True)
+        traceback.print_exc()
+        return (
+            jsonify(
+                {"ok": False, "error": str(e), "traceback": traceback.format_exc()}
+            ),
+            500,
+        )
+
+
+@bp.get("/api/mesh/download_colored_glb")
+def download_colored_glb():
+    """
+    Download the colored GLB mesh file generated during segmentation.
+
+    Query parameters:
+    - temp_dir: (required) The temporary directory path where segmentation_colored.glb was saved
+
+    Returns:
+    - GLB file as binary response if found
+    - JSON error if file not found or temp_dir invalid
+    """
+    from flask import send_file
+
+    try:
+        # Get temp_dir from query parameters
+        temp_dir = request.args.get("temp_dir")
+        if not temp_dir:
+            return (
+                jsonify({"ok": False, "error": "temp_dir parameter is required"}),
+                400,
+            )
+
+        # Validate temp_dir path (security: ensure it's a directory path, not arbitrary file access)
+        if not os.path.isdir(temp_dir):
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": f"Invalid temp_dir: {temp_dir} is not a directory",
+                    }
+                ),
+                400,
+            )
+
+        # Construct path to colored GLB file
+        colored_glb_path = os.path.join(temp_dir, "segmentation_colored.glb")
+
+        # Check if file exists
+        if not os.path.exists(colored_glb_path):
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": f"Colored GLB file not found at: {colored_glb_path}",
+                    }
+                ),
+                404,
+            )
+
+        # Check if it's actually a file (not a directory)
+        if not os.path.isfile(colored_glb_path):
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": f"Path exists but is not a file: {colored_glb_path}",
+                    }
+                ),
+                400,
+            )
+
+        # Send file
+        print(
+            f"[download_colored_glb] Sending colored GLB: {colored_glb_path}",
+            flush=True,
+        )
+        try:
+            # Try newer Flask API first (download_name)
+            return send_file(
+                colored_glb_path,
+                mimetype="model/gltf-binary",
+                as_attachment=True,
+                download_name="segmentation_colored.glb",
+            )
+        except TypeError:
+            # Fallback for older Flask versions (attachment_filename)
+            return send_file(
+                colored_glb_path,
+                mimetype="model/gltf-binary",
+                as_attachment=True,
+                attachment_filename="segmentation_colored.glb",
+            )
+
+    except Exception as e:
+        import traceback
+
+        error_msg = f"Error downloading colored GLB: {str(e)}"
+        print(f"[download_colored_glb] {error_msg}", flush=True)
         traceback.print_exc()
         return (
             jsonify(

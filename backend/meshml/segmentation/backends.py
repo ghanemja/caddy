@@ -1046,27 +1046,50 @@ class Hunyuan3DPartSegmentationBackend:
 
                 # face_ids is per-face labels, need to convert to per-vertex
                 # Map face labels to vertex labels
+                # Initialize vertex_labels with length matching vertices (always correct size)
+                # This ensures vertex_labels count always matches vertices count
                 vertex_labels = np.full(len(vertices), -1, dtype=np.int32)
+
+                # Sanity check: ensure we have the same number of vertices as expected
+                if len(vertex_labels) != len(vertices):
+                    raise ValueError(
+                        f"Mismatch between vertex_labels length ({len(vertex_labels)}) "
+                        f"and vertices length ({len(vertices)})"
+                    )
+
+                # Step 1: Assign labels from faces to vertices
+                # For each face, assign its label to all its vertices (if vertex not already labeled)
                 for face_idx, face in enumerate(mesh.faces):
                     face_label = face_ids[face_idx]
                     if face_label >= 0:  # Valid label
                         for v_idx in face:
                             if vertex_labels[v_idx] == -1:
                                 vertex_labels[v_idx] = face_label
-                            # If vertex already has a label, keep the first one
+                            # If vertex already has a label, keep the first one (first assignment wins)
 
-                # For vertices without labels, assign from nearest face
+                # Step 2: Handle unlabeled vertices by finding nearest face
+                # This ensures all vertices get a label, even if they weren't covered by the face assignment
                 unlabeled = vertex_labels == -1
                 if np.any(unlabeled):
                     try:
                         from scipy.spatial import cKDTree
 
-                        # Get face centers
+                        # Get face centers for nearest-neighbor lookup
                         face_centers = np.array(
                             [mesh.triangles_center[i] for i in range(len(mesh.faces))]
                         )
                         tree = cKDTree(face_centers)
-                        _, nearest_faces = tree.query(vertices[unlabeled], k=1)
+                        unlabeled_vertices = vertices[unlabeled]
+                        # Ensure unlabeled_vertices is 2D (N, 3) even if only one vertex
+                        if unlabeled_vertices.ndim == 1:
+                            unlabeled_vertices = unlabeled_vertices.reshape(1, -1)
+                        _, nearest_faces = tree.query(unlabeled_vertices, k=1)
+                        # Ensure nearest_faces is a 1D array (cKDTree may return 2D for single query)
+                        if nearest_faces.ndim > 1:
+                            nearest_faces = nearest_faces.flatten()
+                        elif np.isscalar(nearest_faces):
+                            nearest_faces = np.array([nearest_faces])
+                        # Assign labels from nearest faces to unlabeled vertices
                         vertex_labels[unlabeled] = face_ids[nearest_faces]
                     except ImportError:
                         # Fallback: use face labels directly for unlabeled vertices
@@ -1077,20 +1100,74 @@ class Hunyuan3DPartSegmentationBackend:
                                     vertex_labels[v_idx] = face_ids[face_idx]
                                     break
 
-                # Ensure all labels are non-negative and contiguous
+                # Step 3: Ensure all labels are non-negative and contiguous
+                # Check if there are any negative labels (not just the first one)
                 unique_labels = np.unique(vertex_labels)
-                if len(unique_labels) > 0 and unique_labels[0] < 0:
-                    # Remap negative labels
-                    label_map = {
-                        old: new for new, old in enumerate(unique_labels) if old >= 0
-                    }
-                    vertex_labels = np.array(
-                        [label_map.get(l, 0) if l >= 0 else 0 for l in vertex_labels],
-                        dtype=np.int32,
-                    )
-                    face_ids = np.array(
-                        [label_map.get(l, 0) if l >= 0 else 0 for l in face_ids],
-                        dtype=np.int32,
+                has_negative_labels = np.any(unique_labels < 0)
+                noise_label = None  # Will be set if negative labels exist
+
+                if has_negative_labels:
+                    # Remap labels to ensure they're non-negative and contiguous (0, 1, 2, ...)
+                    # CRITICAL: Map negative labels to a noise label that doesn't conflict with valid part IDs
+                    # Filter to only positive labels (>= 0), then create mapping to contiguous indices
+                    positive_labels = unique_labels[unique_labels >= 0]
+
+                    if len(positive_labels) == 0:
+                        # No valid labels - set all to 0 (shouldn't happen in practice)
+                        print(
+                            "[Hunyuan3D] ⚠ Warning: No positive labels found, setting all to 0"
+                        )
+                        vertex_labels[:] = 0
+                        face_ids = np.zeros_like(face_ids, dtype=np.int32)
+                    else:
+                        # Create mapping: old_label -> new_contiguous_label (0, 1, 2, ...)
+                        # Sort positive labels to ensure deterministic remapping
+                        positive_labels_sorted = np.sort(positive_labels)
+                        label_map = {
+                            old: new for new, old in enumerate(positive_labels_sorted)
+                        }
+
+                        # Determine noise label: use max(positive_labels) + 1 to avoid conflicts
+                        # This ensures negative labels don't overwrite valid part ID 0
+                        noise_label = int(positive_labels_sorted[-1]) + 1
+
+                        # Apply remapping: positive labels get remapped to contiguous indices,
+                        # negative labels become noise_label (separate from valid part IDs)
+                        def remap_label(l):
+                            """Remap a single label: positive -> contiguous index, negative -> noise_label"""
+                            if l < 0:
+                                return noise_label  # Negative labels become noise_label (doesn't conflict with part IDs)
+                            elif l in label_map:
+                                return label_map[
+                                    l
+                                ]  # Valid positive label gets remapped to contiguous index
+                            else:
+                                # This should never happen if logic is correct, but handle gracefully
+                                print(
+                                    f"[Hunyuan3D] ⚠ Warning: Label {l} not in remap dictionary, defaulting to noise_label {noise_label}"
+                                )
+                                return noise_label
+
+                        vertex_labels = np.array(
+                            [remap_label(l) for l in vertex_labels], dtype=np.int32
+                        )
+                        face_ids = np.array(
+                            [remap_label(l) for l in face_ids], dtype=np.int32
+                        )
+
+                        # Filter out noise_label when counting parts
+                        num_valid_parts = len(positive_labels_sorted)
+                        print(
+                            f"[Hunyuan3D] Remapped labels: {num_valid_parts} positive labels -> contiguous [0, {num_valid_parts-1}], "
+                            f"negative labels -> noise_label {noise_label}"
+                        )
+
+                # Final sanity check: ensure vertex_labels count still matches vertices count
+                # This should always be true, but verify after all processing
+                if len(vertex_labels) != len(vertices):
+                    raise ValueError(
+                        f"After processing, vertex_labels length ({len(vertex_labels)}) "
+                        f"does not match vertices length ({len(vertices)})"
                     )
 
                 # Sample points if needed
@@ -1102,8 +1179,19 @@ class Hunyuan3DPartSegmentationBackend:
                     points = vertices
                     point_labels = vertex_labels
 
-                unique_labels = np.unique(vertex_labels)
-                num_parts = len(unique_labels[unique_labels >= 0])
+                # Count unique valid part IDs (exclude noise labels)
+                # After remapping with negative labels -> noise_label, valid parts are contiguous [0, num_parts-1]
+                unique_labels_final = np.unique(vertex_labels)
+                if has_negative_labels and noise_label is not None:
+                    # Valid parts are those less than noise_label (which is max positive + 1)
+                    # This excludes the noise_label from the part count
+                    valid_part_labels = unique_labels_final[
+                        unique_labels_final < noise_label
+                    ]
+                    num_parts = len(valid_part_labels)
+                else:
+                    # No negative labels were present, all non-negative labels are valid parts
+                    num_parts = len(unique_labels_final[unique_labels_final >= 0])
 
                 print(f"[Hunyuan3D] ✓ P3-SAM segmentation complete: {num_parts} parts")
 

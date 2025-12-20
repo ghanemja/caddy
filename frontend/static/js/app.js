@@ -1131,6 +1131,14 @@ async function loadMeshFile(file, filename) {
                     group.rotation.x = -Math.PI / 2; // Z-up → Y-up
                     setDefaultIfMissing(group);
                     
+                    // Ensure group is visible
+                    group.visible = true;
+                    group.traverse((obj) => {
+                        if (obj.isMesh) {
+                            obj.visible = true;
+                        }
+                    });
+                    
                     // Center mesh at origin
                     const box = new THREE.Box3().setFromObject(group);
                     const center = box.getCenter(new THREE.Vector3());
@@ -2050,9 +2058,11 @@ function updateHover() {
 // Store part labels for mesh parts (separate from parametric model labels)
 const partLabelSprites = new Map();
 
-// Helper function to get color for a part ID (matches mesh coloring)
+// Helper function to get color for a part ID
+// Used by BOTH mesh and point cloud to ensure identical coloring
+// This ensures mesh segmentation colors exactly match point cloud colors
 function getPartColor(partId) {
-    const hue = (partId * 137.508) % 360; // Golden angle for color distribution (same as mesh)
+    const hue = (partId * 137.508) % 360; // Golden angle for color distribution
     const color = new THREE.Color();
     // Use higher saturation (0.8) and higher lightness (0.65) for more distinct, brighter colors
     color.setHSL(hue / 360, 0.8, 0.65);
@@ -2133,14 +2143,13 @@ function applyPartColorsToMesh(meshGroup, segData, centerOffset = null) {
     
     const parts = segData.part_table.parts || [];
     
-    // Generate distinct colors for each part
+    // Generate distinct colors for each part using shared getPartColor function
+    // This ensures exact same colors as point cloud
     const partColors = new Map();
     parts.forEach((part) => {
         const partId = part.part_id;
-        // Use consistent color generation based on part ID
-        const hue = (partId * 137.508) % 360; // Golden angle for color distribution
-        // Use higher saturation (0.8) and higher lightness (0.65) for more distinct, brighter colors
-        const color = new THREE.Color().setHSL(hue / 360, 0.8, 0.65);
+        // Use shared getPartColor function to ensure consistency with point cloud
+        const color = getPartColor(partId);
         partColors.set(partId, color);
     });
     
@@ -2160,14 +2169,6 @@ function applyPartColorsToMesh(meshGroup, segData, centerOffset = null) {
             
             // Create color attribute for vertices
             const colors = new Float32Array(vertexCount * 3);
-            
-            // Ensure material uses vertex colors and doesn't override with base color
-            obj.material.vertexColors = true;
-            // Make sure the material color is white so vertex colors show through
-            if (obj.material.color) {
-                obj.material.color.set(0xffffff);
-            }
-            obj.material.needsUpdate = true;
             
             // Use vertex labels if available (should match vertex count from PartTable)
             if (vertexLabels.length > 0) {
@@ -2192,85 +2193,235 @@ function applyPartColorsToMesh(meshGroup, segData, centerOffset = null) {
                         colors[i * 3 + 2] = lastColor.b;
                     }
                 }
-            } else {
-                // Fallback: use spatial lookup based on vertex positions (after centering)
-                // Adjust PartTable centroids by center offset since mesh was centered
-                for (let i = 0; i < vertexCount; i++) {
-                    const x = positions[i * 3];
-                    const y = positions[i * 3 + 1];
-                    const z = positions[i * 3 + 2];
+            } else if (segData.points && segData.labels && segData.points.length > 0) {
+                // Fallback: Generalize segmentation from point cloud to mesh vertices
+                // Use nearest neighbor lookup from point cloud segmentation
+                console.log(`[applyPartColorsToMesh] No vertex_labels available, generalizing from ${segData.points.length} point cloud samples to ${vertexCount} mesh vertices...`);
+                
+                const points = segData.points;
+                const pointLabels = segData.labels;
+                
+                // Build spatial hash for faster nearest neighbor lookup
+                // Group points by spatial grid cells
+                const gridSize = 50; // Number of grid cells per dimension (adjust based on mesh size)
+                const spatialHash = new Map();
+                
+                // Calculate bounding box of points for grid
+                let minX = Infinity, minY = Infinity, minZ = Infinity;
+                let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+                for (let i = 0; i < points.length; i++) {
+                    const p = points[i];
+                    minX = Math.min(minX, p[0]);
+                    minY = Math.min(minY, p[1]);
+                    minZ = Math.min(minZ, p[2]);
+                    maxX = Math.max(maxX, p[0]);
+                    maxY = Math.max(maxY, p[1]);
+                    maxZ = Math.max(maxZ, p[2]);
+                }
+                
+                const rangeX = maxX - minX || 1;
+                const rangeY = maxY - minY || 1;
+                const rangeZ = maxZ - minZ || 1;
+                const cellSizeX = rangeX / gridSize;
+                const cellSizeY = rangeY / gridSize;
+                const cellSizeZ = rangeZ / gridSize;
+                
+                // Build spatial hash
+                for (let i = 0; i < points.length; i++) {
+                    const p = points[i];
+                    const cellX = Math.floor((p[0] - minX) / cellSizeX);
+                    const cellY = Math.floor((p[1] - minY) / cellSizeY);
+                    const cellZ = Math.floor((p[2] - minZ) / cellSizeZ);
+                    const key = `${cellX},${cellY},${cellZ}`;
                     
-                    // Find which part this vertex belongs to using centroid distance
-                    // Centroids need to be adjusted for mesh centering and rotation
-                    let assignedPartId = null;
-                    let minDist = Infinity;
-                    
-                    // Get mesh rotation from userData
-                    const rotX = meshGroup.userData?.rotationX || 0;
-                    const rotY = meshGroup.userData?.rotationY || 0;
-                    const rotZ = meshGroup.userData?.rotationZ || 0;
-                    
-                    // Create rotation matrix for inverse rotation (to transform vertex back to original space)
-                    const euler = new THREE.Euler(
-                        (rotX * Math.PI) / 180,
-                        (rotY * Math.PI) / 180,
-                        (rotZ * Math.PI) / 180,
-                        'XYZ'
-                    );
-                    const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(euler);
-                    const inverseMatrix = new THREE.Matrix4().copy(rotationMatrix).invert();
-                    
-                    // Transform vertex position back to original space (inverse rotation)
-                    const vertexPos = new THREE.Vector3(x, y, z);
-                    vertexPos.applyMatrix4(inverseMatrix);
-                    
-                    for (const part of parts) {
-                        let centroid = part.centroid || [0, 0, 0];
-                        // Adjust centroid by center offset if mesh was centered
-                        if (centerOffset) {
-                            centroid = [
-                                centroid[0] - centerOffset.x,
-                                centroid[1] - centerOffset.y,
-                                centroid[2] - centerOffset.z
-                            ];
-                        }
-                        const dist = Math.sqrt(
-                            Math.pow(vertexPos.x - centroid[0], 2) +
-                            Math.pow(vertexPos.y - centroid[1], 2) +
-                            Math.pow(vertexPos.z - centroid[2], 2)
-                        );
-                        if (dist < minDist) {
-                            minDist = dist;
-                            assignedPartId = part.part_id;
-                        }
+                    if (!spatialHash.has(key)) {
+                        spatialHash.set(key, []);
                     }
+                    spatialHash.get(key).push({ point: p, label: pointLabels[i], index: i });
+                }
+                
+                // For each vertex, find nearest point using spatial hash
+                // Process in chunks to avoid blocking UI for very large meshes
+                const CHUNK_SIZE = 5000; // Process 5000 vertices per frame (fast enough for most meshes)
+                
+                // If mesh is small, process all at once for speed
+                if (vertexCount <= CHUNK_SIZE) {
+                    // Synchronous processing for small meshes
+                    for (let i = 0; i < vertexCount; i++) {
+                        const vx = positions[i * 3];
+                        const vy = positions[i * 3 + 1];
+                        const vz = positions[i * 3 + 2];
+                        
+                        // Find which grid cell this vertex is in
+                        const cellX = Math.floor((vx - minX) / cellSizeX);
+                        const cellY = Math.floor((vy - minY) / cellSizeY);
+                        const cellZ = Math.floor((vz - minZ) / cellSizeZ);
+                        
+                        // Search nearby cells (check current cell and 26 neighbors)
+                        let nearestDist = Infinity;
+                        let nearestLabel = 0;
+                        
+                        for (let dx = -1; dx <= 1; dx++) {
+                            for (let dy = -1; dy <= 1; dy++) {
+                                for (let dz = -1; dz <= 1; dz++) {
+                                    const key = `${cellX + dx},${cellY + dy},${cellZ + dz}`;
+                                    const cellPoints = spatialHash.get(key);
+                                    if (cellPoints) {
+                                        for (const { point, label } of cellPoints) {
+                                            const dist = Math.sqrt(
+                                                Math.pow(vx - point[0], 2) +
+                                                Math.pow(vy - point[1], 2) +
+                                                Math.pow(vz - point[2], 2)
+                                            );
+                                            if (dist < nearestDist) {
+                                                nearestDist = dist;
+                                                nearestLabel = parseInt(label) || 0;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // If no point found in nearby cells, do a brute force search (shouldn't happen often)
+                        if (nearestDist === Infinity) {
+                            for (let j = 0; j < points.length; j++) {
+                                const p = points[j];
+                                const dist = Math.sqrt(
+                                    Math.pow(vx - p[0], 2) +
+                                    Math.pow(vy - p[1], 2) +
+                                    Math.pow(vz - p[2], 2)
+                                );
+                                if (dist < nearestDist) {
+                                    nearestDist = dist;
+                                    nearestLabel = parseInt(pointLabels[j]) || 0;
+                                }
+                            }
+                        }
+                        
+                        const color = partColors.get(nearestLabel) || new THREE.Color(0x888888);
+                        colors[i * 3] = color.r;
+                        colors[i * 3 + 1] = color.g;
+                        colors[i * 3 + 2] = color.b;
+                    }
+                    console.log(`[applyPartColorsToMesh] Generalized segmentation from point cloud to mesh vertices (processed ${vertexCount} vertices)`);
+                } else {
+                    // Asynchronous chunked processing for large meshes
+                    let vertexIndex = 0;
                     
-                    const color = partColors.get(assignedPartId) || new THREE.Color(0x888888);
-                    colors[i * 3] = color.r;
-                    colors[i * 3 + 1] = color.g;
-                    colors[i * 3 + 2] = color.b;
+                    const processChunk = () => {
+                        const endIndex = Math.min(vertexIndex + CHUNK_SIZE, vertexCount);
+                        
+                        for (let i = vertexIndex; i < endIndex; i++) {
+                            const vx = positions[i * 3];
+                            const vy = positions[i * 3 + 1];
+                            const vz = positions[i * 3 + 2];
+                            
+                            // Find which grid cell this vertex is in
+                            const cellX = Math.floor((vx - minX) / cellSizeX);
+                            const cellY = Math.floor((vy - minY) / cellSizeY);
+                            const cellZ = Math.floor((vz - minZ) / cellSizeZ);
+                            
+                            // Search nearby cells (check current cell and 26 neighbors)
+                            let nearestDist = Infinity;
+                            let nearestLabel = 0;
+                            
+                            for (let dx = -1; dx <= 1; dx++) {
+                                for (let dy = -1; dy <= 1; dy++) {
+                                    for (let dz = -1; dz <= 1; dz++) {
+                                        const key = `${cellX + dx},${cellY + dy},${cellZ + dz}`;
+                                        const cellPoints = spatialHash.get(key);
+                                        if (cellPoints) {
+                                            for (const { point, label } of cellPoints) {
+                                                const dist = Math.sqrt(
+                                                    Math.pow(vx - point[0], 2) +
+                                                    Math.pow(vy - point[1], 2) +
+                                                    Math.pow(vz - point[2], 2)
+                                                );
+                                                if (dist < nearestDist) {
+                                                    nearestDist = dist;
+                                                    nearestLabel = parseInt(label) || 0;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // If no point found, use first label (fallback)
+                            if (nearestDist === Infinity) {
+                                nearestLabel = parseInt(pointLabels[0]) || 0;
+                            }
+                            
+                            const color = partColors.get(nearestLabel) || new THREE.Color(0x888888);
+                            colors[i * 3] = color.r;
+                            colors[i * 3 + 1] = color.g;
+                            colors[i * 3 + 2] = color.b;
+                        }
+                        
+                        vertexIndex = endIndex;
+                        
+                        if (vertexIndex < vertexCount) {
+                            // Process next chunk in next frame to avoid blocking
+                            requestAnimationFrame(processChunk);
+                        } else {
+                            // All vertices processed, update geometry
+                            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                            console.log(`[applyPartColorsToMesh] Generalized segmentation from point cloud to mesh vertices (processed ${vertexCount} vertices asynchronously)`);
+                        }
+                    };
+                    
+                    // Start async processing
+                    processChunk();
+                    
+                    // Return early - colors will be applied asynchronously
+                    // Material setup will happen below, geometry will be updated when processing completes
+                    return;
+                }
+            } else {
+                // Final fallback: use default gray color
+                console.warn(`[applyPartColorsToMesh] No vertex_labels or point cloud data available, using default color. Mesh has ${vertexCount} vertices.`);
+                const defaultColor = new THREE.Color(0x888888);
+                for (let i = 0; i < vertexCount; i++) {
+                    colors[i * 3] = defaultColor.r;
+                    colors[i * 3 + 1] = defaultColor.g;
+                    colors[i * 3 + 2] = defaultColor.b;
                 }
             }
             
+            // Set color attribute (already filled synchronously)
+            // Note: For async chunked processing, the attribute is set in the chunk processor
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
             
-            // Update material to use vertex colors
-            // Ensure we're using a material that supports vertex colors
-            if (!obj.material.isMeshStandardMaterial && !obj.material.isMeshPhongMaterial && !obj.material.isMeshLambertMaterial) {
-                // Convert to MeshStandardMaterial if needed
-                const newMaterial = new THREE.MeshStandardMaterial({
-                    vertexColors: true,
+            // Use MeshBasicMaterial which doesn't require lighting and shows vertex colors brightly
+            // This ensures colors are visible without any lighting setup - perfect for segmentation visualization
+            // Only create new material if we don't already have a MeshBasicMaterial with vertex colors
+            if (!obj.material.isMeshBasicMaterial || !obj.material.vertexColors) {
+                const newMaterial = new THREE.MeshBasicMaterial({
+                    vertexColors: true, // Enable vertex colors - they will display directly without lighting
                     side: obj.material.side || THREE.FrontSide,
                 });
+                
+                // Dispose old material to prevent memory leaks
+                if (obj.material && obj.material.dispose) {
+                    obj.material.dispose();
+                }
+                
                 obj.material = newMaterial;
             } else {
+                // Material already correct, just ensure vertexColors is enabled
                 obj.material.vertexColors = true;
-                // Set base color to white so vertex colors show through
-                if (obj.material.color) {
-                    obj.material.color.set(0xffffff);
-                }
             }
-            obj.material.needsUpdate = true;
+            
+            // Ensure the mesh is visible
+            obj.visible = true;
+            
+            // Log for debugging (only if we have vertex labels)
+            if (vertexLabels.length > 0) {
+                const uniquePartIds = new Set();
+                vertexLabels.slice(0, Math.min(vertexLabels.length, vertexCount)).forEach(l => uniquePartIds.add(l));
+                console.log(`[applyPartColorsToMesh] Applied colors to mesh: ${vertexCount} vertices, ${uniquePartIds.size} unique parts (using MeshBasicMaterial - no lighting required)`);
+            }
         }
     });
 }
@@ -2302,16 +2453,28 @@ function highlightPart(partId) {
                     meshCenter.y >= bboxMin[1] - 0.5 && meshCenter.y <= bboxMax[1] + 0.5 &&
                     meshCenter.z >= bboxMin[2] - 0.5 && meshCenter.z <= bboxMax[2] + 0.5) {
                     
-                    // Store original emissive if not already stored
-                    if (!obj.userData.originalEmissive) {
-                        obj.userData.originalEmissive = obj.material.emissive.clone();
-                        obj.userData.originalEmissiveIntensity = obj.material.emissiveIntensity || 0;
+                    // MeshBasicMaterial doesn't have emissive property, so use a different highlighting method
+                    if (obj.material.isMeshBasicMaterial) {
+                        // For MeshBasicMaterial, we can't use emissive, so skip highlighting
+                        // The part is already colored by vertex colors, which is sufficient
+                        break;
                     }
                     
-                    // Apply hover highlight
-                    obj.material.emissive.copy(hoverEmissive);
-                    obj.material.emissiveIntensity = 0.6;
-                    obj.material.needsUpdate = true;
+                    // For other materials, use emissive highlighting
+                    if (obj.material.emissive) {
+                        // Store original emissive if not already stored
+                        if (!obj.userData.originalEmissive) {
+                            obj.userData.originalEmissive = obj.material.emissive.clone();
+                            obj.userData.originalEmissiveIntensity = obj.material.emissiveIntensity || 0;
+                        }
+                        
+                        // Apply hover highlight
+                        if (hoverEmissive) {
+                            obj.material.emissive.copy(hoverEmissive);
+                            obj.material.emissiveIntensity = 0.6;
+                            obj.material.needsUpdate = true;
+                        }
+                    }
                     break;
                 }
             }
@@ -2440,15 +2603,18 @@ function createPointCloudFromSegmentation(segData) {
         return null;
     }
     
-    // Generate colors for each part
+    // Generate colors for each part using shared getPartColor function
+    // This ensures exact same colors as mesh
     const partColors = new Map();
     const uniqueLabels = [...new Set(labels)];
     uniqueLabels.forEach((labelId) => {
         const partId = parseInt(labelId) || 0;
-        const hue = (partId * 137.508) % 360; // Same color scheme as mesh
-        const color = new THREE.Color().setHSL(hue / 360, 0.8, 0.65);
+        // Use shared getPartColor function to ensure consistency with mesh
+        const color = getPartColor(partId);
         partColors.set(partId, color);
     });
+    
+    console.log(`[createPointCloudFromSegmentation] Created point cloud with ${points.length} points, ${uniqueLabels.length} unique parts (using same colors as mesh via getPartColor)`);
     
     // Create geometry
     const geometry = new THREE.BufferGeometry();
@@ -2539,9 +2705,14 @@ function togglePointCloudView(showPointCloud) {
             }
         }
     } else {
-        // Show mesh
+        // Show mesh (with segmentation colors matching point cloud)
         if (group) {
             group.visible = true;
+            // Ensure mesh colors are applied (they should match point cloud colors via getPartColor)
+            if (segmentationData && segmentationData.part_table) {
+                const centerOffset = group.userData.centerOffset || null;
+                applyPartColorsToMesh(group, segmentationData, centerOffset);
+            }
         }
         
         // Hide point cloud
@@ -2600,7 +2771,8 @@ function clearPartHighlight(partId) {
     if (!group) return;
     
     group.traverse((obj) => {
-        if (obj.isMesh && obj.material && obj.userData.originalEmissive) {
+        if (obj.isMesh && obj.material && obj.material.emissive && obj.userData.originalEmissive) {
+            // Only restore emissive if material supports it (not MeshBasicMaterial)
             obj.material.emissive.copy(obj.userData.originalEmissive);
             obj.material.emissiveIntensity = obj.userData.originalEmissiveIntensity || 0;
             obj.material.needsUpdate = true;
