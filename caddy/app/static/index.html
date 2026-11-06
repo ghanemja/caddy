@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>caddy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=DM+Mono:wght@400;500&family=Figtree:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <div class="logo"></div><div class="brand">caddy</div>
+  <span class="chip">SMLib kernel</span>
+  <span class="chip demo" id="demo-chip" style="display:none">hosted demo · replays</span>
+  <div class="spacer"></div>
+  <span class="hint-s">right-click anything: <b>Why?</b> · <b>Keep</b> · <b>Change</b> · <b>Not needed</b></span>
+  <button class="btn sm tourbtn" id="tour-btn" aria-label="Show the tour" title="Show me around">?</button>
+</header>
+<main>
+  <!-- left: every object you've made -->
+  <aside id="left">
+    <div class="h">History</div>
+    <div id="hist"></div>
+  </aside>
+
+  <!-- middle: New → the whiteboard while it builds → the model -->
+  <section id="mid">
+    <div class="pane" id="p-new">
+      <button class="bignew" id="btn-new"><span class="plus">+</span><span>New</span></button>
+      <div class="hint">drop in a scan or a catalogue, or start from a sample</div>
+    </div>
+
+    <div class="pane" id="p-choose">
+      <div class="row between"><div class="h big">New object</div><button class="btn" id="choose-x">×</button></div>
+      <label class="drop" id="dropzone">
+        <input type="file" id="file" accept=".stl,.ply,.obj,.csv" hidden>
+        <div class="big">Drop a scan (.stl .ply .obj) or a catalogue (.csv)</div>
+        <div class="hint-s">or click to choose a file</div>
+      </label>
+      <div class="h" style="margin-top:6px">…or start from a sample</div>
+      <div id="samples"></div>
+    </div>
+
+    <div class="pane" id="p-board">
+      <div class="livebar" id="livebar"></div>
+      <div class="wb" id="wb-live"></div>
+    </div>
+
+    <div class="pane" id="p-model">
+      <div class="card viewer" id="viewer">
+        <div class="overlay" id="overlay"></div>
+        <div class="vtop"><button class="btn go" id="btn-new2">+ New</button><label class="chip lbltog" title="show part labels on the model"><input type="checkbox" id="lbl-toggle" checked> Labels</label><span class="chip" id="busy-chip" style="display:none">◠ The LLM is answering…</span></div>
+        <div class="sizebar" id="sizebar"></div>
+        <div class="vhint" id="vhint"></div>
+      </div>
+      <form class="prompt" id="prompt" autocomplete="off">
+        <div class="pnote" id="prompt-note"></div>
+        <div class="prow"><input id="prompt-in" type="text" placeholder="Ask for a change in plain words, e.g. make it 10% longer and keep every check passing">
+          <button class="btn go" id="prompt-go" type="submit">Send</button></div>
+      </form>
+    </div>
+
+    <div class="pane" id="p-stored">
+      <div class="stored" id="stored"></div>
+    </div>
+  </section>
+
+  <!-- right: details of the selected object -->
+  <aside id="right">
+    <div id="dempty" class="dempty">Pick an object on the left, or press <b>New</b>.</div>
+    <div id="detail" style="display:none">
+      <div class="dhead">
+        <div><div class="dtitle" id="d-title"></div><div class="hint-s" id="d-sub"></div></div>
+        <div class="row"><span class="chip" id="d-status"></span><select id="d-size" class="chip" title="size"></select>
+          <button class="btn sm" id="d-usd" title="Export the selected size as USD (exact BRep)">USD ↓</button></div>
+      </div>
+      <div class="tabs" id="dtabs">
+        <button data-tab="tree" class="on">Feature tree</button><button data-tab="sketch">2D sketches</button>
+        <button data-tab="gdt">Dims &amp; tolerances</button><button data-tab="aero" id="tab-aero-btn" style="display:none">Aero</button><button data-tab="explain">Explainability</button>
+      </div>
+      <div class="tabbody" id="tab-tree"></div>
+      <div class="tabbody" id="tab-sketch"></div>
+      <div class="tabbody" id="tab-gdt"></div>
+      <div class="tabbody" id="tab-aero"></div>
+      <div class="tabbody" id="tab-explain"></div>
+    </div>
+  </aside>
+</main>
+
+<div class="mdock" id="mdock" style="display:none"></div>
+<div class="ctx" id="ctx" style="display:none"></div>
+<div class="modal" id="modal" style="display:none"><div class="card">
+  <div class="h">Proposed edit</div>
+  <div id="modal-why" class="muted" style="margin-bottom:8px"></div>
+  <pre id="modal-ops"></pre>
+  <div class="row" style="justify-content:flex-end"><button class="btn" id="btn-reject">Reject</button><button class="btn go" id="btn-approve">Approve</button></div>
+</div></div>
+<script src="/static/vendor/three.min.js"></script>
+<script src="/static/viewer.js"></script>
+<script src="/static/sketch.js"></script>
+<script src="/static/drawing.js"></script>
+<script src="/static/whiteboard.js"></script>
+<script src="/static/app.js"></script>
+<script src="/static/tour.js"></script>
+</body>
+</html>

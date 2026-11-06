@@ -1,0 +1,10 @@
+usd-brep==1.0.1
+./packages/smlibquery
+numpy
+jsonschema
+fastapi
+uvicorn
+anthropic
+pytest
+httpx
+smlibpy==0.6.2

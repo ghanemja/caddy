@@ -1,0 +1,196 @@
+{
+ "family": "bspt_hex_reducing_nipple",
+ "title": "BSPT hex reducing nipple",
+ "parameters": [
+  {
+   "name": "inlet_thread_len",
+   "displayName": "Inlet thread length",
+   "part": "inlet",
+   "column": "inlet_thread_len",
+   "unit": "mm"
+  },
+  {
+   "name": "in_major_d",
+   "displayName": "Inlet major Ø (gauge plane)",
+   "part": "inlet",
+   "source": "ISO 7-1",
+   "unit": "mm"
+  },
+  {
+   "name": "in_gauge_len",
+   "displayName": "Inlet gauge length",
+   "part": "inlet",
+   "source": "ISO 7-1",
+   "unit": "mm"
+  },
+  {
+   "name": "hex_af",
+   "displayName": "Hex across flats",
+   "part": "hex",
+   "column": "hex_af",
+   "unit": "mm"
+  },
+  {
+   "name": "hex_len",
+   "displayName": "Hex length",
+   "part": "hex",
+   "column": "hex_len",
+   "unit": "mm"
+  },
+  {
+   "name": "chamfer_deg",
+   "displayName": "Hex chamfer angle",
+   "part": "hex",
+   "default": 30,
+   "unit": "deg"
+  },
+  {
+   "name": "outlet_thread_len",
+   "displayName": "Outlet thread length",
+   "part": "outlet",
+   "column": "outlet_thread_len",
+   "unit": "mm"
+  },
+  {
+   "name": "out_major_d",
+   "displayName": "Outlet major Ø (gauge plane)",
+   "part": "outlet",
+   "source": "ISO 7-1",
+   "unit": "mm"
+  },
+  {
+   "name": "out_gauge_len",
+   "displayName": "Outlet gauge length",
+   "part": "outlet",
+   "source": "ISO 7-1",
+   "unit": "mm"
+  },
+  {
+   "name": "bore_d",
+   "displayName": "Bore Ø",
+   "part": "bore",
+   "column": "bore_d",
+   "unit": "mm"
+  }
+ ],
+ "blocks": [
+  {
+   "id": "inlet_thread",
+   "op": "cone",
+   "part": "inlet",
+   "role": "thread",
+   "params": {
+    "z": "0",
+    "d_base": "in_major_d - in_gauge_len/16",
+    "d_top": "in_major_d + (inlet_thread_len - in_gauge_len)/16",
+    "h": "inlet_thread_len"
+   },
+   "aliases": {
+    "side": "inlet.thread",
+    "cap": "inlet.end"
+   }
+  },
+  {
+   "id": "hex_prism",
+   "op": "hex_prism",
+   "part": "hex",
+   "role": "flats",
+   "params": {
+    "z": "inlet_thread_len",
+    "af": "hex_af",
+    "h": "hex_len"
+   },
+   "aliases": {
+    "side": "hex.flat",
+    "cap": "hex.end"
+   }
+  },
+  {
+   "id": "hex_chamfer",
+   "op": "double_cone",
+   "part": "hex",
+   "role": "chamfer",
+   "params": {
+    "z": "inlet_thread_len",
+    "d": "hex_af*1.02",
+    "h": "hex_len",
+    "angle_deg": "chamfer_deg"
+   },
+   "aliases": {
+    "side": "hex.chamfer",
+    "cap": "hex.end"
+   }
+  },
+  {
+   "id": "hex",
+   "op": "intersect",
+   "part": "hex",
+   "role": "body",
+   "inputs": [
+    "hex_prism",
+    "hex_chamfer"
+   ]
+  },
+  {
+   "id": "join_inlet",
+   "op": "union",
+   "part": "hex",
+   "role": "join",
+   "inputs": [
+    "inlet_thread",
+    "hex"
+   ]
+  },
+  {
+   "id": "outlet_thread",
+   "op": "cone",
+   "part": "outlet",
+   "role": "thread",
+   "params": {
+    "z": "inlet_thread_len + hex_len",
+    "d_base": "out_major_d + (outlet_thread_len - out_gauge_len)/16",
+    "d_top": "out_major_d - out_gauge_len/16",
+    "h": "outlet_thread_len"
+   },
+   "aliases": {
+    "side": "outlet.thread",
+    "cap": "outlet.end"
+   }
+  },
+  {
+   "id": "join_outlet",
+   "op": "union",
+   "part": "outlet",
+   "role": "join",
+   "inputs": [
+    "join_inlet",
+    "outlet_thread"
+   ]
+  },
+  {
+   "id": "bore",
+   "op": "cylinder",
+   "part": "bore",
+   "role": "through_hole",
+   "params": {
+    "z": "-1",
+    "d": "bore_d",
+    "h": "inlet_thread_len + hex_len + outlet_thread_len + 2"
+   },
+   "aliases": {
+    "side": "bore.wall",
+    "cap": "bore.end"
+   }
+  },
+  {
+   "id": "cut_bore",
+   "op": "difference",
+   "part": "bore",
+   "role": "cut",
+   "inputs": [
+    "join_outlet",
+    "bore"
+   ]
+  }
+ ]
+}

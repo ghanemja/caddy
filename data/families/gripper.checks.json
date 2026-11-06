@@ -1,0 +1,106 @@
+{
+  "family": "so101_rod_gripper",
+  "title": "Two-finger rod gripper (SO-101 demo)",
+  "catalogue": "gripper_rods.csv",
+  "size_name": "Ø{rod_d} {pose}",
+  "required_bodies": [
+    "rod",
+    "jaw_l",
+    "jaw_r"
+  ],
+  "required_aliases": [
+    "rod.surface"
+  ],
+  "brief": "Design fingertips for a two-finger parallel gripper (like the SO-101 arm's) that grip round rods. ONE assembly graph for every rod size in the catalogue, in two poses: open (closing = 0) and closed (closing = 1). Bodies: 'rod' (a cylinder of Ø rod_d, length rod_len, on the z axis, centred at z=0), 'jaw_r' and 'jaw_l' (fingertip pads that close along x from either side; jaw_l is jaw_r mirrored, e.g. a move with rot_z 180). Each jaw has a V-groove facing the rod so the rod self-centres. In the closed pose both jaws must touch the rod with no interference and keep a gap between each other; in the open pose each jaw opens by 'stroke' and must leave clearance for the rod to go in.",
+  "checks": [
+    {
+      "id": "rod_d",
+      "column": "rod_d",
+      "measure": "diameter",
+      "target": "rod.surface",
+      "tol": 0.01
+    },
+    {
+      "id": "closed_touch_r",
+      "rule": "closed: right jaw touches the rod",
+      "when": "closing",
+      "measure": "gap",
+      "a": "jaw_r",
+      "b": "rod",
+      "expect": "0",
+      "tol": 0.01
+    },
+    {
+      "id": "closed_touch_l",
+      "rule": "closed: left jaw touches the rod",
+      "when": "closing",
+      "measure": "gap",
+      "a": "jaw_l",
+      "b": "rod",
+      "expect": "0",
+      "tol": 0.01
+    },
+    {
+      "id": "no_interference_r",
+      "rule": "closed: right jaw does not cut into the rod",
+      "when": "closing",
+      "measure": "overlap",
+      "a": "jaw_r",
+      "b": "rod",
+      "op": "<=",
+      "expect": "0",
+      "tol": 0.001
+    },
+    {
+      "id": "no_interference_l",
+      "rule": "closed: left jaw does not cut into the rod",
+      "when": "closing",
+      "measure": "overlap",
+      "a": "jaw_l",
+      "b": "rod",
+      "op": "<=",
+      "expect": "0",
+      "tol": 0.001
+    },
+    {
+      "id": "jaws_clear",
+      "rule": "closed: the jaws keep at least 2 mm between them (they must close on the rod, not on each other)",
+      "when": "closing",
+      "measure": "gap",
+      "a": "jaw_l",
+      "b": "jaw_r",
+      "op": ">=",
+      "expect": "2",
+      "tol": 0.0
+    },
+    {
+      "id": "open_clear_r",
+      "rule": "open: at least 2 mm between the right jaw and the rod",
+      "when": "1 - closing",
+      "measure": "gap",
+      "a": "jaw_r",
+      "b": "rod",
+      "op": ">=",
+      "expect": "2",
+      "tol": 0.0
+    },
+    {
+      "id": "open_clear_l",
+      "rule": "open: at least 2 mm between the left jaw and the rod",
+      "when": "1 - closing",
+      "measure": "gap",
+      "a": "jaw_l",
+      "b": "rod",
+      "op": ">=",
+      "expect": "2",
+      "tol": 0.0
+    }
+  ],
+  "material": {
+    "name": "PLA, printed",
+    "density_g_cm3": 1.24
+  },
+  "workpiece": [
+    "rod"
+  ]
+}

@@ -1,0 +1,9 @@
+# caddy in one container: docker compose up --build, then http://localhost:8000
+# Build with Claude needs ANTHROPIC_API_KEY (export it, or put it in a .env file next to this one).
+services:
+  caddy:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

@@ -1,0 +1,92 @@
+{
+  "family": "roadster",
+  "title": "Roadster-style coupe (from photos)",
+  "catalogue": "roadster.csv",
+  "size_name": "{variant}",
+  "required_bodies": [
+    "body",
+    "wheels"
+  ],
+  "required_aliases": [],
+  "material": {
+    "name": "massing model (volume only)",
+    "density_g_cm3": 0.0
+  },
+  "brief": "A two-door coupe body blocked out from photos: one smooth skinned shell (cq skin through cross-sections along z, nose at z=0, y up from the ground) with four wheel arches, plus four wheels as a second body. Every catalogue row is an envelope the body must hit: overall length, body width, roof height, ground clearance. Wheels sit on the ground and clear their arches.",
+  "checks": [
+    {
+      "id": "overall_len",
+      "column": "length",
+      "measure": "overall_length",
+      "tol": 1.0
+    },
+    {
+      "id": "body_width",
+      "column": "width",
+      "measure": "extent",
+      "a": "body",
+      "axis": "x",
+      "tol": 5.0
+    },
+    {
+      "id": "roof_height",
+      "column": "height",
+      "measure": "max_coord",
+      "a": "body",
+      "axis": "y",
+      "tol": 5.0
+    },
+    {
+      "id": "ground_clearance",
+      "column": "ground",
+      "measure": "min_coord",
+      "a": "body",
+      "axis": "y",
+      "op": ">=",
+      "tol": 2.0
+    },
+    {
+      "id": "wheels_on_ground",
+      "rule": "the wheels stand on the ground (lowest point at y = 0)",
+      "measure": "min_coord",
+      "a": "wheels",
+      "axis": "y",
+      "expect": "0",
+      "tol": 0.5
+    },
+    {
+      "id": "wheel_diameter",
+      "column": "wheel_d",
+      "measure": "extent",
+      "a": "wheels",
+      "axis": "y",
+      "tol": 0.5
+    },
+    {
+      "id": "arch_clearance",
+      "rule": "every tyre clears its wheel arch by at least 20 mm",
+      "measure": "gap",
+      "a": "wheels",
+      "b": "body",
+      "op": ">=",
+      "expect": "20",
+      "tol": 0.5
+    },
+    {
+      "id": "body_skinned",
+      "rule": "the body is a smooth skinned shell: at least 40% of its surface comes from skin()",
+      "measure": "surface_share",
+      "a": "body",
+      "ops": [
+        "skin"
+      ],
+      "op": ">=",
+      "expect": "0.4",
+      "tol": 0.0
+    }
+  ],
+  "axes": "length along z (nose at z = 0), y up from the ground (y = 0), x across (width centred on x = 0)",
+  "cq_extensions": [
+    "skin"
+  ]
+}

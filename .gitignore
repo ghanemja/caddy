@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.egg-info/
+out/
+.pytest_cache/
+.claude/worktrees/
+
+# the agent writes every run to runs/ (scratch); the ones Replay and the tests use are kept in docs/runs/
+/runs/
+.env
+
+# pip builds the local smlibquery package in place
+packages/*/build/

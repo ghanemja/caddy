@@ -1,0 +1,23 @@
+{
+ "name": "so101_moving_jaw",
+ "source": "https://github.com/TheRobotStudio/SO-ARM100 (STEP/SO101/Follower_Specific/Moving_Jaw_SO101.step)",
+ "license": "Apache-2.0",
+ "step": "Moving_Jaw_SO101.step",
+ "faces": 189,
+ "closed_solid": true,
+ "volume_mm3": 20692.7,
+ "bbox_mm": [
+  [
+   -12.3,
+   -82.0,
+   -24.0
+  ],
+  [
+   10.0,
+   10.0,
+   24.0
+  ]
+ ],
+ "sha1": "f4db5a1e6f65b11d4cfc1dc149760778d6bf83cc",
+ "note": "volume measured on the stored .smb by usd_brep (smlibpy reports the same on re-read)"
+}

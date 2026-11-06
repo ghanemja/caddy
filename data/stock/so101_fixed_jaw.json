@@ -1,0 +1,23 @@
+{
+ "name": "so101_fixed_jaw",
+ "source": "https://github.com/TheRobotStudio/SO-ARM100 (STEP/SO101/Follower_Specific/Wrist_Roll_Follower_SO101.step)",
+ "license": "Apache-2.0",
+ "step": "Wrist_Roll_Follower_SO101.step",
+ "faces": 237,
+ "closed_solid": true,
+ "volume_mm3": 56624.2,
+ "bbox_mm": [
+  [
+   -35.2,
+   -24.218,
+   -0.05
+  ],
+  [
+   30.0,
+   27.782,
+   105.375
+  ]
+ ],
+ "sha1": "5e2e7fe79c101a29afa687b4f44834a9255e90f5",
+ "note": "volume measured on the stored .smb by usd_brep (smlibpy reports the same on re-read)"
+}

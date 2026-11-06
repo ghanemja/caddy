@@ -1,0 +1,87 @@
+{
+  "family": "bspt_hex_reducing_nipple",
+  "title": "BSPT hex reducing nipple",
+  "required_aliases": [
+    "inlet.thread",
+    "inlet.end",
+    "hex.flat",
+    "hex.end",
+    "outlet.thread",
+    "outlet.end",
+    "bore.wall"
+  ],
+  "checks": [
+    {
+      "id": "overall_len",
+      "column": "overall_len",
+      "measure": "overall_length",
+      "tol": 0.01
+    },
+    {
+      "id": "hex_af",
+      "column": "hex_af",
+      "measure": "across_flats",
+      "target": "hex.flat",
+      "tol": 0.01
+    },
+    {
+      "id": "hex_len",
+      "column": "hex_len",
+      "measure": "axial_length",
+      "target": "hex.flat",
+      "tol": 0.01
+    },
+    {
+      "id": "inlet_thread_len",
+      "column": "inlet_thread_len",
+      "measure": "axial_length",
+      "target": "inlet.thread",
+      "tol": 0.01
+    },
+    {
+      "id": "outlet_thread_len",
+      "column": "outlet_thread_len",
+      "measure": "axial_length",
+      "target": "outlet.thread",
+      "tol": 0.01
+    },
+    {
+      "id": "bore_d",
+      "column": "bore_d",
+      "measure": "diameter",
+      "target": "bore.wall",
+      "tol": 0.01
+    },
+    {
+      "id": "inlet_major_d",
+      "expect": "in_major_d",
+      "source": "ISO 7-1",
+      "measure": "diameter_at",
+      "target": "inlet.thread",
+      "z": "in_gauge_len",
+      "tol": 0.01
+    },
+    {
+      "id": "outlet_major_d",
+      "expect": "out_major_d",
+      "source": "ISO 7-1",
+      "measure": "diameter_at",
+      "target": "outlet.thread",
+      "z": "inlet_thread_len + hex_len + outlet_thread_len - out_gauge_len",
+      "tol": 0.01
+    },
+    {
+      "id": "thread_clears_hex",
+      "rule": "the inlet thread must not break through the hex flats",
+      "measure": "max_diameter",
+      "target": "inlet.thread",
+      "op": "<=",
+      "expect": "hex_af",
+      "tol": 0.0
+    }
+  ],
+  "material": {
+    "name": "brass CW617N",
+    "density_g_cm3": 8.47
+  }
+}

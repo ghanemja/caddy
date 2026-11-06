@@ -1,0 +1,15 @@
+family bspt_hex_reducing_nipple · size 1/2 x 1/4 · closed ✓ · volume 10220.3 mm³ · 27 faces
+part inlet  blocks: inlet_thread  params: inlet_thread_len, in_major_d, in_gauge_len
+  inlet.thread cone Ø20.442→Ø21.692 z 0.000–20.000
+  inlet.end plane z=0.000
+part hex  blocks: hex_prism, hex_chamfer, hex, join_inlet  params: hex_af, hex_len, chamfer_deg
+  hex.end[0..1] 2x plane z 20.000–28.000
+  hex.flat[0..5] 6x plane z 20.000–28.000
+  hex.chamfer[0..13] 14x cone z 20.000–28.000
+part outlet  blocks: outlet_thread, join_outlet  params: outlet_thread_len, out_major_d, out_gauge_len
+  outlet.thread cone Ø13.720→Ø12.782 z 28.000–43.000
+  outlet.end plane z=43.000
+part bore  blocks: bore, cut_bore  params: bore_d
+  bore.wall cylinder Ø8.000 z 0.000–43.000
+checks 9/9 ✓  overall_len 43.0 · hex_af 22.0 · hex_len 8.0 · inlet_thread_len 20.0 · outlet_thread_len 15.0 · bore_d 8.0 · inlet_major_d 20.955 · outlet_major_d 13.157 · thread_clears_hex 21.6925
+smoke 20/20 ✓

@@ -1,0 +1,13 @@
+rod_d,pose,closing,stroke,rod_len
+6,open,0,8,40
+6,closed,1,8,40
+8,open,0,8,40
+8,closed,1,8,40
+10,open,0,8,40
+10,closed,1,8,40
+12,open,0,8,40
+12,closed,1,8,40
+16,open,0,8,40
+16,closed,1,8,40
+20,open,0,8,40
+20,closed,1,8,40

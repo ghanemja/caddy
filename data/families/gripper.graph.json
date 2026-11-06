@@ -1,0 +1,160 @@
+{
+ "family": "so101_rod_gripper",
+ "title": "Two-finger rod gripper (SO-101 demo)",
+ "parameters": [
+  {
+   "name": "groove_depth",
+   "displayName": "V-groove depth",
+   "part": "jaw_r",
+   "default": 5,
+   "unit": "mm"
+  },
+  {
+   "name": "pad_thick",
+   "displayName": "Pad thickness",
+   "part": "jaw_r",
+   "default": 12,
+   "unit": "mm"
+  },
+  {
+   "name": "pad_width",
+   "displayName": "Pad width",
+   "part": "jaw_r",
+   "default": 22,
+   "unit": "mm"
+  },
+  {
+   "name": "pad_height",
+   "displayName": "Pad height",
+   "part": "jaw_r",
+   "default": 20,
+   "unit": "mm"
+  }
+ ],
+ "blocks": [
+  {
+   "id": "rod",
+   "op": "cylinder",
+   "part": "rod",
+   "role": "workpiece",
+   "params": {
+    "z": "-rod_len/2",
+    "d": "rod_d",
+    "h": "rod_len"
+   },
+   "aliases": {
+    "side": "rod.surface",
+    "cap": "rod.end"
+   }
+  },
+  {
+   "id": "pad_r",
+   "op": "box",
+   "part": "jaw_r",
+   "role": "pad",
+   "params": {
+    "cx": "rod_d/2/sin(45) - groove_depth + (1 - closing)*stroke + pad_thick/2",
+    "cy": "0",
+    "cz": "0",
+    "dx": "pad_thick",
+    "dy": "pad_width",
+    "dz": "pad_height"
+   },
+   "aliases": {
+    "side": "jaw_r.face",
+    "cap": "jaw_r.end"
+   }
+  },
+  {
+   "id": "vee_r",
+   "op": "box",
+   "part": "jaw_r",
+   "role": "groove",
+   "params": {
+    "cx": "rod_d/2/sin(45) - groove_depth + (1 - closing)*stroke",
+    "cy": "0",
+    "cz": "0",
+    "dx": "groove_depth*sqrt(2)",
+    "dy": "groove_depth*sqrt(2)",
+    "dz": "pad_height + 2",
+    "rot_z": "45"
+   },
+   "aliases": {
+    "side": "jaw_r.groove"
+   }
+  },
+  {
+   "id": "jaw_r",
+   "op": "difference",
+   "part": "jaw_r",
+   "role": "fingertip",
+   "inputs": [
+    "pad_r",
+    "vee_r"
+   ]
+  },
+  {
+   "id": "pad_l",
+   "op": "box",
+   "part": "jaw_l",
+   "role": "pad",
+   "params": {
+    "cx": "rod_d/2/sin(45) - groove_depth + (1 - closing)*stroke + pad_thick/2",
+    "cy": "0",
+    "cz": "0",
+    "dx": "pad_thick",
+    "dy": "pad_width",
+    "dz": "pad_height"
+   },
+   "aliases": {
+    "side": "jaw_l.face",
+    "cap": "jaw_l.end"
+   }
+  },
+  {
+   "id": "vee_l",
+   "op": "box",
+   "part": "jaw_l",
+   "role": "groove",
+   "params": {
+    "cx": "rod_d/2/sin(45) - groove_depth + (1 - closing)*stroke",
+    "cy": "0",
+    "cz": "0",
+    "dx": "groove_depth*sqrt(2)",
+    "dy": "groove_depth*sqrt(2)",
+    "dz": "pad_height + 2",
+    "rot_z": "45"
+   },
+   "aliases": {
+    "side": "jaw_l.groove"
+   }
+  },
+  {
+   "id": "jaw_l0",
+   "op": "difference",
+   "part": "jaw_l",
+   "role": "fingertip",
+   "inputs": [
+    "pad_l",
+    "vee_l"
+   ]
+  },
+  {
+   "id": "jaw_l",
+   "op": "move",
+   "part": "jaw_l",
+   "role": "mirror",
+   "inputs": [
+    "jaw_l0"
+   ],
+   "params": {
+    "rot_z": "180"
+   }
+  }
+ ],
+ "bodies": {
+  "rod": "rod",
+  "jaw_r": "jaw_r",
+  "jaw_l": "jaw_l"
+ }
+}

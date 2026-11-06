@@ -1,0 +1,8 @@
+[
+ {"add": {"id": "inlet_runout", "op": "cylinder", "part": "inlet", "role": "runout", "optional": true,
+          "params": {"z": "-1", "d": "hex_af - 0.2", "h": "inlet_thread_len + 2"},
+          "aliases": {"side": "inlet.thread", "cap": "inlet.end"}}, "after": "inlet_thread"},
+ {"add": {"id": "inlet_trim", "op": "intersect", "part": "inlet", "role": "runout", "optional": true,
+          "inputs": ["inlet_thread", "inlet_runout"]}, "after": "inlet_runout"},
+ {"block": "join_inlet", "inputs": ["inlet_trim", "hex"]}
+]
