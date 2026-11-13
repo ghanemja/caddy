@@ -66,8 +66,8 @@ python3.12 -m venv .venv
 .venv/bin/python -m caddy --port 8000
 ```
 
-Tests: `.venv/bin/python -m pytest -q tests packages/smlibquery/tests` (124 pass and 3 skip because their
-recordings aren't in the repo; about 3.5 min. What each test proves is in [Verification](docs/VERIFY.md)). Browser smoke test
+Tests: `.venv/bin/python -m pytest -q tests packages/smlibquery/tests` (131 pass; 3 skip because their
+recordings aren't in the repo and 4 more skip unless `solidcraft-cli` is installed; about 3.5 min. What each test proves is in [Verification](docs/VERIFY.md)). Browser smoke test
 (Node + Playwright + Chromium): `node tests/e2e/smoke.mjs`.
 
 **Try it in two minutes (no API key needed).** On your first visit a short tour walks through a replay for you (skip it
@@ -82,6 +82,9 @@ any time; **?** in the header brings it back). Or by hand:
 
 - **Build with Claude** (live) needs `ANTHROPIC_API_KEY`: export it, or put `ANTHROPIC_API_KEY=...` in a `.env` next to
   `docker-compose.yml`.
+- **Picture → parametric CAD** needs `ANTHROPIC_API_KEY` and [SolidCraft](https://solidcraft.io/download)'s
+  `solidcraft-cli` on `PATH` (or `SOLIDCRAFT_CLI=/path/to/solidcraft-cli`; in Docker, mount it and set the variable).
+  Drop a PNG or JPEG on **New**, or run `python -m caddy.solidcraft chair.jpg --hint "dining chair, seat 450 mm high"`.
 - Scan → CAD also uses `smlibpy` (in `requirements.txt`) to read meshes and STEP files, which `usd-brep` can't.
 
 ## What I built, in order
@@ -135,6 +138,23 @@ primitives found on the kernel, then the draft and Claude's fix; every scan poin
 the drawing sheet comes from the same solid; and moving a value shows when it would pull the model off the scan.
 
 ![Scan → CAD of a hex nipple: whiteboard, dimensions in tolerance, drawing sheet, and a value preview](docs/media/scan-to-cad.gif)
+
+**5b. Picture → parametric CAD, with SolidCraft.** Drop a picture of an object and the LLM models it in
+[SolidCraft](https://github.com/tangency-labs/solidcraft), an open-source parametric CAD it drives through MCP: named
+parameters, a feature timeline, mirrors and patterns. caddy stays the judge. After every change it exports the
+design, reads it into SMLib and measures it, and `finish` is refused until:
+
+- the solids SMLib reads back are closed and have the volume SolidCraft reports;
+- the object is its own mirror image across the plane the model declared (every surface point, mirrored, lands back
+  on the model). Symmetry is the default: chairs, tables, couches and aircraft are assumed symmetric, with hidden
+  sides mirroring the visible ones, unless the model says what in the picture shows otherwise;
+- every named parameter rebuilds without errors and actually moves the geometry (tried larger and smaller);
+- the model's outline, seen as the picture was taken, overlaps the object in the picture.
+
+You get `model.sc` to keep editing in SolidCraft, the STEP file SMLib judged, and the same whiteboard, viewer and
+drawing sheets as any caddy object. Moving a value in the Feature tab rebuilds the timeline in SolidCraft and judges
+the result on SMLib before you keep it, with no model call. This is tested end to end with a scripted stand-in for
+the model; a live run on a real photo hasn't been recorded yet ([Verification](docs/VERIFY.md)).
 
 **6. Freeform on the kernel.** Two ops CadQuery doesn't have: `skin()` lofts a smooth body through cross-sections, and
 `wing()` makes NACA airfoil panels. A Roadster-style coupe from two photos, then the flying car, which came from
@@ -193,6 +213,7 @@ Measured from the recorded Claude runs in `docs/runs/` (cost from the API's repo
 | `caddy/kernel/` | SMLib layer: build and label faces, checks, smoke invariants, aero, stability |
 | `caddy/library/` | Stability principle for the model, and the lookup into SimReady objects ([ADR-12](docs/DECISIONS.md)) |
 | `caddy/agent/` | Claude's loop, prompts, session (digest for the model, explain for the UI) |
+| `caddy/solidcraft/` | Image → CAD: the LLM models a picture in [SolidCraft](https://github.com/tangency-labs/solidcraft) over MCP; SMLib judges the export ([ADR-13](docs/DECISIONS.md)) |
 | `caddy/scan/` | Scan → CAD for turned parts: axis, slices, primitive fit, draft script; reuses the same kernel, agent and UI |
 | `caddy/app/` | Server and front end (whiteboard, viewer, Feature tab, ISO/ASME sheets) |
 | `packages/smlibquery/` | smlibquery: the CadQuery-style API on SMLib ([README](packages/smlibquery/README.md)) |

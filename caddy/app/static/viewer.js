@@ -171,7 +171,7 @@ class Viewer {
   setDims(dims) { this.dims = dims || []; this.draw(); }
   draw() {
     if (!this.wrap) { this.renderer.render(this.scene, this.camera); return; }
-    this.wrap.rotation.set(this.rot.x, this.rot.y, 0);
+    this.wrap.rotation.set(this.rot.x, this.rot.y, this.rot.z || 0);   // z: stands a Z-up model upright; y then turns it about its own up axis
     const dist = this.size / (2 * Math.tan(THREE.MathUtils.degToRad(9))) * 1.35 * this.zoom * Math.max(1, 1.25 / this.camera.aspect);
     this.camera.position.set(0, 0, dist); this.camera.lookAt(0, 0, 0);
     this.camera.near = dist / 50; this.camera.far = dist * 6; this.camera.updateProjectionMatrix();   // fittings to cars
@@ -311,7 +311,7 @@ const Thumbs = {
     const scene = makeScene();
     const { group } = buildModel(m, colorOf, { ink: 0.35 });
     const { wrap, size } = placeModel(group, m.bbox);
-    wrap.rotation.set(this.rot.x, this.rot.y, 0); scene.add(wrap);
+    wrap.rotation.set(this.rot.x, this.rot.y, this.rot.z || 0); scene.add(wrap);
     const dist = size / (2 * Math.tan(THREE.MathUtils.degToRad(9))) * 1.25;
     const cam = new THREE.PerspectiveCamera(18, w / h, dist / 50, dist * 6);
     cam.position.set(0, 0, dist); cam.lookAt(0, 0, 0);

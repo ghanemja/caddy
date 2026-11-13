@@ -311,3 +311,6 @@ details.pgroup.env > summary { font-weight: 600; }
 .prompt input { flex: 1; min-width: 0; font: inherit; padding: 9px 12px; border: 2px solid var(--ink); border-radius: 10px; background: var(--card); }
 .prompt input:focus { outline: 2px solid var(--action); outline-offset: 1px; }
 .prompt input:disabled, .prompt .btn:disabled { opacity: .55; cursor: not-allowed; }
+/* image → CAD: the note that goes with a dropped picture, and its cards */
+.imghint { width: 100%; margin-top: 8px; padding: 9px 12px; font: 14px var(--body); border: 2px solid var(--ink); border-radius: 10px; background: var(--card); }
+.wbcard.k-picture { background: var(--sticky); } .wbcard.k-see, .wbcard.k-cmp { background: #EEF4FB; }

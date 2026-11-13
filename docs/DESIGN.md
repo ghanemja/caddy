@@ -40,6 +40,7 @@ whiteboard, a feature tree with sliders, drawings and tables.
 | Server | `caddy/app/server.py` | FastAPI: state, meshes, previews, script edits and undo, locks, constraints in words, aero, drawings data, the event stream, Replay. |
 | Front end | `caddy/app/static/` | Vanilla JS + three.js: history, live whiteboard, viewer, Feature tab, ISO/ASME sheets (`drawing.js`), Aero, Explainability, metrics dock. |
 | Aero | `caddy/kernel/aero.py` | Vortex lattice on the model's `wing()` planforms + drag build-up from the kernel's exact areas. |
+| Image → CAD | `caddy/solidcraft/` | The LLM models a picture in SolidCraft over MCP (`mcp.py`, `agent.py`); caddy exports STEP after each change, reads it into SMLib and judges it (`judge.py`, `session.py`). Value changes go back through SolidCraft and are judged the same way. |
 | Scan → CAD | `caddy/scan/` | Axis, slices, outline and primitive fit on SMLib (via `smlibpy`), a draft script, then Claude; every scan point checked against the solid. |
 
 ## Whiteboard cards
@@ -55,7 +56,13 @@ Every card reads the same way, top to bottom, so a step is understood at a glanc
    pivot edge, and a slide or tip arrow.
 4. One line of numbers, if the step has any.
 
-New card kinds add a picture to `WB_PIC` in `whiteboard.js`; pictures are drawn at render time, not stored.
+Image → CAD adds four kinds. *Picture in* (you) shows the picture. *What the picture shows* (LLM) draws a chair
+with its mirror plane, crossed out when the model declared none. A SolidCraft build step (LLM) gets the kernel render
+of the solids SMLib read back, with the check dots. *Outline vs picture* (SolidCraft) shows SolidCraft's overlay,
+model red on picture blue.
+
+New card kinds add a picture to `WB_PIC` in `whiteboard.js`; pictures are drawn at render time, not stored (the
+picture and the overlay are the exceptions: they are shrunk to 240 px and kept with the object).
 
 ## Data formats
 

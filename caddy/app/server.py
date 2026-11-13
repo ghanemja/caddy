@@ -28,6 +28,7 @@ from caddy.kernel.catalogue import DATA
 from caddy.kernel.family import build_size
 from caddy.app import intent, scripting
 from caddy.kernel.annotate import dimensions
+from caddy.solidcraft.mcp import McpError, find_cli
 
 STATIC = Path(__file__).parent / "static"
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,7 +48,13 @@ def is_scan(fam: str) -> bool:
     return bool(FAMILIES.get(fam, {}).get("scan"))
 
 
+def is_image(fam: str) -> bool:
+    return fam == "image"
+
+
 def new_session(fam: str, graph: dict | None = None):
+    if is_image(fam):      # an image session needs its picture: it is only ever made by /api/image/start
+        raise HTTPException(400, "image → CAD starts from a picture: drop one on New")
     if is_scan(fam):
         from caddy.scan.scans import new_session as scan_session
         return scan_session(fam)[0]
@@ -65,10 +72,15 @@ class Hub:
         self.family = "bspt_nipple"
         self.reset()
 
-    def reset(self, family: str | None = None):
+    def reset(self, family: str | None = None, session=None):
+        """A fresh session for `family`. `session` hands one in ready-made (image → CAD: it owns a SolidCraft
+        process, so it is built by the caller and closed here when it is replaced)."""
         with self.lock:
+            old = getattr(self, "session", None)
             self.family = family or self.family
-            self.session = new_session(self.family)
+            self.session = session if session is not None else new_session(self.family)
+            if old is not None and old is not self.session and hasattr(old, "close"):
+                old.close()
             self.events: list[dict] = []
             self.running = False
             self.mesh_cache: dict[tuple, dict] = {}
@@ -151,7 +163,11 @@ def state():
             for f in p["features"] + p["bookkeeping"]:
                 f["fields"] = by_block.get(f["id"], [])
         scan = dict(steps=s.scan_steps, tol=s.tol) if is_scan(HUB.family) else None
-        return dict(values=values, last_edit=HUB.last_edit, can_undo=bool(HUB.undo), scan=scan,
+        image = dict(hint=s.hint, declared=s.declared, parameters=s.sc_parameters,
+                     saved={k: v.name for k, v in s.saved.items()}, dead=s.facts.get("dead", []),
+                     overlap=s.facts.get("overlap")) if is_image(HUB.family) else None
+        return dict(values=values, last_edit=HUB.last_edit, can_undo=bool(HUB.undo), scan=scan, image=image,
+            solidcraft=bool(find_cli()),
             graph=g, graph_hash=graph_hash(g), versions=len(s.versions),
             parameters=(g or {}).get("parameters", []), blocks=blocks,
             tree=tree, constraints=intent.constraints(s),
@@ -208,7 +224,9 @@ def preview(p: Preview):
         row = dict(s.rows[p.size])
         params = {q["name"] for q in s.graph.get("parameters", [])}
         row.update({k: float(v) for k, v in p.values.items() if k in row or k in params})
-        rep = build_size(s.ev, s.graph, row, s.spec)
+        if is_image(HUB.family) and HUB.running:      # the what-if would run inside the LLM's SolidCraft session
+            raise HTTPException(409, "The LLM is working; try again when the run ends")
+        rep = s.trial(p.values) if is_image(HUB.family) else build_size(s.ev, s.graph, row, s.spec)
         HUB.last_preview = ((graph_hash(s.graph), p.size, tuple(sorted(p.values.items()))), rep)
         if rep.result is None:
             return dict(ok=False, error=rep.error)
@@ -231,11 +249,15 @@ def predict(p: Preview):
         s = HUB.session
         if s.graph is None:
             raise HTTPException(400, "no graph yet")
+        if is_image(HUB.family) and HUB.running:
+            raise HTTPException(409, "The LLM is working; try again when the run ends")
         base_row = dict(s.rows[p.size])
         design = {q["name"]: float(q["default"]) for q in s.graph.get("parameters", []) if isinstance(q.get("default"), (int, float))}
         cur = {**design, **{k: float(v) for k, v in base_row.items() if isinstance(v, (int, float))}}
 
         def run(vals):
+            if is_image(HUB.family):       # SolidCraft rebuilds the what-if; SMLib judges it; the design is put back
+                return s.trial(vals)
             row = dict(base_row); row.update({k: float(v) for k, v in vals.items()})
             return build_size(s.ev, s.graph, row, s.spec)
 
@@ -487,6 +509,8 @@ def start(p: Start):
     if HUB.running:
         raise HTTPException(409, "already running")
     fam = p.family if p.family in FAMILIES else HUB.family
+    if is_image(fam):
+        return _image_follow_up(p)
     keep = p.keep and HUB.session.graph is not None and fam == HUB.family
     prev = HUB.session.graph if keep else None
     prev_script = HUB.session.script if keep else None
@@ -533,6 +557,80 @@ def start(p: Start):
                       "finish when the kernel reports every size ✓.\n\n" + HUB.session.report())
         threading.Thread(target=_run_live, args=(task,), daemon=True).start()
     return dict(ok=True)
+
+
+# --- image → CAD (SolidCraft models, SMLib judges) -------------------------------------------------------
+
+class ImageStart(BaseModel):
+    image: str                  # base64, or a data: URL
+    hint: str = ""              # what it is, known sizes, what the picture hides
+    name: str = ""
+
+
+def _run_image(task: str):
+    try:
+        from caddy.solidcraft.agent import ImageAgent
+        ImageAgent(HUB.session, on_event=HUB.emit).run(task)
+    except Exception as e:  # surface API and SolidCraft problems on the page
+        HUB.emit(dict(type="error", message=f"{type(e).__name__}: {e}"))
+    finally:
+        HUB.running = False
+
+
+@app.post("/api/image/start")
+def image_start(p: ImageStart):
+    """A picture in: Claude models it in SolidCraft (parametric), SMLib judges every step."""
+    import base64
+    import binascii
+    from caddy.solidcraft.agent import task
+    from caddy.solidcraft.session import ImageSession
+    if HUB.running:
+        raise HTTPException(409, "already running")
+    try:
+        data = base64.b64decode(p.image.split(",", 1)[1] if p.image.startswith("data:") else p.image, validate=True)
+        name = Path(p.name).stem[:60] if p.name else "picture"
+        s = ImageSession(data, hint=p.hint, title=f"Image → CAD: {name}")
+    except (binascii.Error, ValueError, IndexError) as e:
+        raise HTTPException(400, f"not a picture caddy can read: {e}")
+    except McpError as e:
+        raise HTTPException(503, str(e))
+    HUB.reset("image", session=s)
+    HUB.running = True
+    threading.Thread(target=_run_image, args=(task(p.hint),), daemon=True).start()
+    return dict(ok=True)
+
+
+def _image_follow_up(p: Start):
+    """A question or a change request about the image model: the same SolidCraft session, a new conversation."""
+    s = HUB.session
+    if p.mode == "replay":
+        raise HTTPException(404, "an image → CAD run can't be replayed: it needs SolidCraft and the LLM")
+    if not p.task:
+        raise HTTPException(400, "image → CAD starts from a picture: drop one on New")
+    HUB.reset("image", session=s)
+    params = ", ".join(f"{q['name']} = {q['value']:g} {q['unit']}".strip() for q in s.sc_parameters
+                       if isinstance(q.get("value"), (int, float)))
+    task = ("The SolidCraft design for this picture is already built (caddy's kernel report is below).\n"
+            f"The engineer says: {p.task}\n"
+            f"Parameters: {params or 'none'}\n"
+            "If this is a question, answer it in one to three short sentences (inspect_design / measure if you need "
+            "numbers) and do not change the design. If it asks for a change, make it with small edits (set_parameter, "
+            "timeline.edit, one more feature) and finish when caddy's kernel accepts it.\n\n" + s.report())
+    HUB.running = True
+    threading.Thread(target=_run_image, args=(task,), daemon=True).start()
+    return dict(ok=True)
+
+
+@app.get("/api/image/file/{kind}")
+def image_file(kind: str):
+    """The picture, or what an accepted run saved: SolidCraft's parametric design (.sc) and the STEP SMLib judged."""
+    s = HUB.session
+    if not is_image(HUB.family):
+        raise HTTPException(404, "not an image → CAD model")
+    path = s.reference if kind == "picture" else s.saved.get(kind)
+    if path is None or not Path(path).exists():
+        raise HTTPException(404, "nothing saved yet: the kernel has not accepted the model")
+    return FileResponse(path, filename=Path(path).name)
 
 
 def describe_ref(s: Session, r: dict) -> str:
@@ -714,8 +812,12 @@ def param_set(p: ParamSet):
         before = _counts(s)
         t0 = time.time()
         try:
-            s.edit_graph([{"param": k, "default": float(v)} for k, v in p.values.items()])
-        except G.GraphError as err:
+            if is_image(HUB.family):      # the parameters live in SolidCraft: it rebuilds, SMLib judges
+                s.set_values(p.values)
+                HUB.mesh_cache.clear(); HUB.dims_cache.clear()
+            else:
+                s.edit_graph([{"param": k, "default": float(v)} for k, v in p.values.items()])
+        except (G.GraphError, McpError) as err:
             raise HTTPException(400, str(err))
         rebuilt = sorted({b for r in s.reports if r.result for b in r.result.rebuilt})
         after = _counts(s)

@@ -5,6 +5,7 @@ const WB_KIND = {
   fix: { ic: "↻", by: "LLM" }, look: { ic: "?", by: "LLM" }, done: { ic: "✓", by: "kernel" }, fail: { ic: "✗", by: "kernel" },
   say: { ic: "💬", by: "LLM" }, you: { ic: "✎", by: "you" }, edit: { ic: "✎", by: "you" }, sample: { ic: "▣", by: "caddy" },
   reject: { ic: "⊘", by: "SMLib" }, stab: { ic: "∠", by: "caddy" },
+  picture: { ic: "▧", by: "you" }, see: { ic: "◉", by: "LLM" }, sc: { ic: "⬚", by: "LLM" }, cmp: { ic: "◐", by: "SolidCraft" },
 };
 // Every card reads the same way: who did it (chip), what it is (title), and a picture. Cards that show the model
 // get a kernel render (fillPics in app.js); the rest get one of these small drawings.
@@ -23,6 +24,13 @@ const WB_PIC = {
     : `<rect x="88" y="16" width="44" height="44" rx="6"/><path d="M98 39l9 9 16-18" stroke="${WB_C.green}" stroke-width="3"/>`),
   edit: () => wbSvg(`<path d="M80 62l8-22 46-46 14 14-46 46z"/><path d="M80 62l22-8M128 0l14 14" stroke-width="1.6"/><path d="M60 74h100" stroke-width="1.6"/>`),
   stab: (c) => stabPic(c.geo, c.lean),
+  // what Claude says the picture shows: a chair seen from the front with its mirror plane (none: the plane crossed out)
+  see: (c) => wbSvg(`<path d="M84 12v36M136 12v36M84 20h52M84 32h52" /><path d="M76 48h68v8H76z"/><path d="M82 56v20M138 56v20"/>
+    <path d="M110 4v78" stroke="${c.plane === "none" ? WB_C.warn : WB_C.blue}" stroke-width="2" stroke-dasharray="5 4"/>
+    ${c.plane === "none" ? `<path d="M102 36l16 16M118 36l-16 16" stroke="${WB_C.warn}" stroke-width="3"/>` : `<path d="M96 66l-8 4 8 4M124 66l8 4-8 4M90 70h40" stroke="${WB_C.blue}" stroke-width="1.6"/>`}`),
+  // two outlines laid over each other (shown until SolidCraft's overlay arrives)
+  cmp: () => wbSvg(`<rect x="62" y="16" width="70" height="52" rx="8" stroke="${WB_C.blue}"/><rect x="84" y="22" width="70" height="52" rx="8" stroke="${WB_C.warn}"/>`),
+  picture: () => wbSvg(`<rect x="60" y="10" width="100" height="64" rx="5"/><circle cx="84" cy="30" r="7"/><path d="M60 66l30-24 22 16 18-12 30 20"/>`),
 };
 
 // The body on a slope at the angle where it first gives way, drawn to scale from the kernel's numbers: footprint

@@ -4,7 +4,8 @@
 const $ = (s) => document.querySelector(s);
 const CHECK_LABEL = { rod_d: "Ø rod", closed_touch_r: "grip R", closed_touch_l: "grip L", no_interference_r: "no cut R",
   no_interference_l: "no cut L", jaws_clear: "jaw gap", open_clear_r: "open R", open_clear_l: "open L", overall_len: "L", hex_af: "A/F", hex_len: "hex L", inlet_thread_len: "in L", outlet_thread_len: "out L",
-  bore_d: "bore", inlet_major_d: "Ø in", outlet_major_d: "Ø out", thread_clears_hex: "clears hex", matches_scan: "scan→CAD", no_extra_material: "CAD→scan" };
+  bore_d: "bore", inlet_major_d: "Ø in", outlet_major_d: "Ø out", thread_clears_hex: "clears hex", matches_scan: "scan→CAD", no_extra_material: "CAD→scan",
+  export_intact: "export intact", symmetric: "symmetric", features_healthy: "features", parametric: "parameters", parameters_drive: "params drive", matches_picture: "picture" };
 const SHORT = (id) => CHECK_LABEL[id] || id;
 const OP_ICON = { cone: "◭", cylinder: "◯", prism: "⬡", hex_prism: "⬡", box: "▭", stock: "▣", double_cone: "◇",
   slab: "▬", union: "∪", difference: "−", intersect: "∩", move: "↻" };
@@ -118,7 +119,7 @@ async function refresh() {
     do {
       again = false;
       const st = await api("/api/state");
-      const view = st.family === "gripper" ? { x: -0.35, y: -1.25 } : st.family === "roadster" ? { x: 0.32, y: 0.72 } : { x: -0.42, y: -0.62 };
+      const view = st.family === "gripper" ? { x: -0.35, y: -1.25 } : st.family === "image" ? { x: 0.3, y: 0.6, z: Math.PI / 2 } : st.family === "roadster" ? { x: 0.32, y: 0.72 } : { x: -0.42, y: -0.62 };
       if (S.viewFamily !== st.family) { S.viewFamily = st.family; viewer.rot = { ...view }; viewer.zoom = 1; Thumbs.rot = view; S.scanThumbs = {}; }
       if (S.st && st.graph_hash !== S.st.graph_hash) S.bom = null;
       S.st = st;
@@ -186,8 +187,10 @@ function onEvent(ev) {
   } else if (ev.type === "tool") {
     if (!quiet) m.tools++;
     const k = ev.kernel || {}, why = S.pendingWhy; S.pendingWhy = "";
-    const verdict = k.sizes ? (isScanFam(e.fam) ? (k.ok ? "matches the scan ✓" : "off the scan ✗") : `${k.sizes - (k.failing || []).length}/${k.sizes} sizes ✓`) : "";
-    if (ev.name === "check_stability") {
+    const verdict = IMG_isFam(e.fam) ? (k.sizes ? (k.ok ? "every check ✓" : `✗ ${(k.failing_checks || []).map(SHORT).slice(0, 3).join(", ")}`) : "no solid yet") : k.sizes ? (isScanFam(e.fam) ? (k.ok ? "matches the scan ✓" : "off the scan ✗") : `${k.sizes - (k.failing || []).length}/${k.sizes} sizes ✓`) : "";
+    if (IMG_isFam(e.fam) && IMG_TOOLS[ev.name]) {
+      IMG_card(ev, e, add, verdict, why, m, quiet);
+    } else if (ev.name === "check_stability") {
       if (ev.stab) add(stabCard(ev.stab, why));
       else add({ kind: "look", title: "Stability check", sub: String(ev.result || "").slice(0, 120), why });
     } else if (["build_cad", "build_graph"].includes(ev.name)) {
@@ -209,7 +212,7 @@ function onEvent(ev) {
       const face = ev.input.face || "", part = face.includes(".") ? face.split(".")[0] : "";
       add({ kind: "look", title: `${ev.name} ${face || ev.input.check || ""}`.trim(), sub: String(ev.result || "").slice(0, 90) + (String(ev.result || "").length > 90 ? "…" : ""), why, part: part || undefined, needPic: !!part });
     }
-    if (!quiet && ["build_cad", "build_graph", "edit_cad", "edit_graph", "finish"].includes(ev.name)) explainCard(e.cards[e.cards.length - 1], ev, e);
+    if (!quiet && (["build_cad", "build_graph", "edit_cad", "edit_graph", "finish"].includes(ev.name) || (IMG_isFam(e.fam) && IMG_TOOLS[ev.name] === "build" && !ev.error))) explainCard(e.cards[e.cards.length - 1], ev, e);
     refresh();
   } else if (ev.type === "end") {
     if (!quiet) {
@@ -228,6 +231,64 @@ function onEvent(ev) {
   else if (ev.type === "error") add({ kind: "fail", title: "Error", sub: ev.message, ok: false });
   else if (["constraint_added", "board_edit"].includes(ev.type)) refresh();
   saveHist(); drawLive();
+}
+// Image → CAD: Claude models in SolidCraft, SMLib judges. Building steps get a kernel render and the check dots;
+// looking steps (what Claude read or measured in SolidCraft) are small cards; the outline comparison shows its overlay.
+const IMG_TOOLS = { batch: "build", execute: "build", set_parameter: "build", undo: "build", redo: "build", describe_object: "see",
+  compare_picture: "cmp", screenshot: "look", measure: "look", inspect_design: "look", body_topology: "look", check_parameters: "look",
+  skill_reference: "read", list_commands: "read", describe_command: "read", finish: "finish" };
+function IMG_card(ev, e, add, verdict, why, m, quiet) {
+  const kind = IMG_TOOLS[ev.name], inp = ev.input || {}, res = String(ev.result || "");
+  if (kind === "read") return;                              // reading SolidCraft's manual is not a step of the design
+  if (kind === "finish") { add({ kind: ev.error ? "fail" : "done", title: ev.error ? "“Done” refused: the kernel disagrees" : "Done · the kernel confirms it", sub: ev.error ? verdict : "saved model.sc and model.step", ok: !ev.error, why, needPic: !ev.error }); return; }
+  if (kind === "see") {
+    if (ev.error) { add({ kind: "fail", title: "Description refused", sub: res.slice(0, 140), ok: false, why }); return; }
+    const d = ev.declared || inp;
+    add({ kind: "see", title: d.object || "What the picture shows", sub: d.symmetry_plane === "none" ? `not symmetric: ${d.asymmetry_evidence || ""}` : `mirrors across ${d.symmetry_plane} · seen from ${d.picture_view?.view || "a camera"}`, why: [d.assumptions, why].filter(Boolean).join("\n"), plane: d.symmetry_plane });
+    return;
+  }
+  if (kind === "cmp") {
+    const ov = (res.match(/"overlap":\s*([0-9.]+)/) || [])[1];
+    const c = add({ kind: "cmp", title: ov ? `Outline vs picture · ${(+ov * 100).toFixed(0)} %` : "Outline vs picture", sub: ev.error ? res.slice(0, 120) : "model red, picture blue (SolidCraft)", ok: ev.error ? false : undefined, why, overlap: ov ? +ov : null });
+    if (c && ev.overlay) IMG_shrink(ev.overlay, 240).then(u => { c.pic = u; saveHist(); drawLive(); });
+    return;
+  }
+  if (kind === "look") { add({ kind: "look", title: ev.name.replace(/_/g, " "), sub: ev.error ? res.slice(0, 120) : ev.name === "screenshot" ? `${inp.view || "camera"} view` : "read from SolidCraft", why, ok: ev.error ? false : undefined }); return; }
+  if (!quiet) m.builds++;
+  const steps = ev.name === "batch" ? (inp.commands || []) : ev.name === "execute" ? [inp] : [];
+  const feats = steps.map(c => String(c.command || "")).filter(c => /^solid\./.test(c)).map(c => c.replace(/^solid\./, ""));
+  const title = ev.name === "set_parameter" ? `${inp.name} = ${inp.value ?? inp.expression}` : ev.name === "undo" || ev.name === "redo" ? ev.name
+    : feats.length ? [...new Set(feats)].slice(0, 3).join(", ") + (new Set(feats).size > 3 ? "…" : "") : `${steps.length || 1} SolidCraft command${steps.length === 1 ? "" : "s"}`;
+  if (ev.error) add({ kind: "fail", title: "SolidCraft said no", sub: res.slice(0, 160), ok: false, why, by: "SolidCraft" });
+  else add({ kind: "sc", title, sub: `SolidCraft${steps.length > 1 ? ", " + steps.length + " commands" : ""} · kernel: ${verdict}`, ok: (ev.kernel || {}).sizes ? ev.kernel.ok : undefined, why, needPic: !!(ev.kernel || {}).sizes });
+}
+// a picture small enough to keep with the object in history
+function IMG_shrink(url, w) {
+  return new Promise((done) => {
+    const im = new Image();
+    im.onload = () => { const k = Math.min(1, w / im.width), c = document.createElement("canvas"); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k);
+      c.getContext("2d").drawImage(im, 0, 0, c.width, c.height); done(c.toDataURL("image/webp", 0.8)); };
+    im.onerror = () => done(null); im.src = url;
+  });
+}
+async function IMG_start(file, hint) {
+  if (S.st?.running || S.run) { toast("Something is still running; wait for it to finish."); return; }
+  if (STATIC) { toast(LIVE_ONLY); return; }
+  if (!S.st?.solidcraft) { toast("Image → CAD models in SolidCraft: install it (solidcraft.io/download) or set SOLIDCRAFT_CLI to solidcraft-cli, then restart caddy."); return; }
+  if (!S.st?.key) { toast("Image → CAD needs the LLM: set ANTHROPIC_API_KEY and restart caddy."); return; }
+  if (file.size > 5e6) { toast("That picture is over 5 MB; use a smaller one."); return; }
+  const url = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(file); });
+  const e = newEntry("image", "live"); e.title = "Image → CAD: " + file.name.replace(/\.[^.]+$/, "");
+  S.hist.unshift(e); S.hist = S.hist.slice(0, 16);
+  S.cur = S.live = e.id; S.mid = "board"; S.selBlock = null; S.whatIf = null; S.size = 0; S.meshKey = null;
+  const c = card(e, { kind: "picture", title: "Picture in", sub: hint || "the LLM models it in SolidCraft; SMLib judges", by: "you" });
+  c.pic = e.thumb = await IMG_shrink(url, 240);
+  S.es?.close(); drawAll();
+  try {
+    S.run = { entryId: e.id, kind: "new" };
+    await api("/api/image/start", { image: url, hint: hint || "", name: file.name });
+    listen(); refresh();
+  } catch (err) { S.run = null; e.status = "error"; card(e, { kind: "fail", title: "Couldn't start", sub: err.message, ok: false }); S.mid = "stored"; drawAll(); toast(err.message); }
 }
 // What the kernel says about a step, drawn on its card: check dots (ringed when they flip), what fails and by how
 // much, which features were added / changed / removed, the code change, and a build the kernel rejected and why.
@@ -275,6 +336,7 @@ function explainCard(c, ev, e) {
   }
 }
 const isScanFam = (fam) => /^scan_/.test(fam);
+const IMG_isFam = (fam) => fam === "image";
 function runEnded() {
   const e = S.run ? entry(S.run.entryId) : null;
   if (!e) return;
@@ -361,7 +423,7 @@ function drawPrompt() {
   const busy = S.run?.kind === "ask", why = STATIC ? LIVE_ONLY : !S.st?.key ? "Set ANTHROPIC_API_KEY to ask the LLM." : "";
   const sel = S.selBlock ? `about <b>${esc(S.selBlock)}</b> · ` : "";
   $("#prompt-note").innerHTML = busy ? `<span class="spin">◠</span> The LLM is working on it; the kernel checks every edit.`
-    : S.reply ? `<b>LLM:</b> ${esc(S.reply)}` : why || `${sel}Describe a change. The LLM edits the script and the kernel checks every catalogue size.`;
+    : S.reply ? `<b>LLM:</b> ${esc(S.reply)}` : why || (S.st?.image ? `${sel}Describe a change. The LLM edits the SolidCraft design and the kernel checks it.` : `${sel}Describe a change. The LLM edits the script and the kernel checks every catalogue size.`);
   $("#prompt-in").disabled = busy || !!why;
   $("#prompt-go").disabled = busy || !!why;
 }
@@ -484,7 +546,7 @@ function drawHist() {
   el.innerHTML = S.hist.map(e => {
     const m = e.metrics, secs = m.seconds ?? m.wall;
     return `<div class="hitem ${e.id === S.cur ? "on" : ""}" data-hist="${e.id}">
-      <div class="hthumb">${e.thumb ? `<img src="${e.thumb}" alt="">` : `<span>${isScanFam(e.fam) ? "◎" : "▤"}</span>`}</div>
+      <div class="hthumb">${e.thumb ? `<img src="${e.thumb}" alt="">` : `<span>${IMG_isFam(e.fam) ? "▧" : isScanFam(e.fam) ? "◎" : "▤"}</span>`}</div>
       <div class="hmeta"><div class="ht">${esc(e.title)}</div>
         <div class="hs"><span class="dot ${e.status}"></span>${e.status === "running" ? "running…" : e.demo ? "demo example" : ({ replay: "replay", live: "LLM", sample: "sample" }[e.mode] || e.mode) + " · " + ago(e.created)}</div>
         ${m.rounds ? `<div class="hs mono">${ktok(m.input + m.cacheR + m.cacheW)} in · ${ktok(m.output)} out${secs ? " · " + fmtSec(secs) : ""}</div>` : ""}</div></div>`;
@@ -602,6 +664,7 @@ function drawDetail() {
   sel.style.display = live && st.sizes.length > 1 ? "" : "none";
   if (live) { sel.innerHTML = st.sizes.map((s, i) => `<option value="${i}" ${i === S.size ? "selected" : ""}>${esc(s.size)}${s.ok ? "" : " ✗"}</option>`).join(""); sel.onchange = () => selectSize(+sel.value); }
   $("#d-usd").style.display = live && S.mesh ? "" : "none";
+  $("#d-sc").style.display = live && S.st?.image?.saved?.design ? "" : "none";
   drawMetrics(e);
   document.querySelectorAll("#dtabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === S.tab));
   document.querySelectorAll(".tabbody").forEach(t => t.classList.toggle("on", t.id === "tab-" + S.tab));
@@ -1227,9 +1290,10 @@ $("#btn-reject").onclick = () => api("/api/agent/decide", { approve: false });
 $("#btn-new").onclick = () => { S.mid = "choose"; drawMid(); };
 $("#btn-new2").onclick = () => { S.mid = "choose"; drawMid(); };
 $("#choose-x").onclick = () => { S.mid = S.cur === S.live && S.cur ? "model" : S.cur ? "stored" : "new"; drawMid(); };
+$("#d-sc").onclick = () => { window.location = "/api/image/file/design"; };
 $("#d-usd").onclick = () => { if (STATIC) { toast(LIVE_ONLY); return; } window.location = `/api/export/${S.size}`; };
 const dz = $("#dropzone");
-const dropped = (file) => { if (!file) return; toast(`“${file.name}”: bringing your own scan or catalogue needs an upload endpoint on the server, which isn't built yet. Start from a sample below for now.`); };
+const dropped = (file) => { if (!file) return; if (/^image\/(png|jpeg)$/.test(file.type)) { IMG_start(file, $("#img-hint").value.trim()); return; } toast(`“${file.name}”: bringing your own scan or catalogue needs an upload endpoint on the server, which isn't built yet. Drop a picture (.png .jpg), or start from a sample below.`); };
 dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("on"); });
 dz.addEventListener("dragleave", () => dz.classList.remove("on"));
 dz.addEventListener("drop", (e) => { e.preventDefault(); dz.classList.remove("on"); dropped(e.dataTransfer.files[0]); });
@@ -1254,7 +1318,7 @@ window.addEventListener("keydown", (e) => { if (e.key === "Escape") { hideCtx();
   }
   if (!STATIC && (st.graph || st.running)) {   // pick up what the server has: the matching object, or a new record of it
     let e = S.hist.find(x => x.fam === st.family && (x.status === "running" || x.hash === st.graph_hash));
-    if (!e) { e = newEntry(st.family, "sample"); e.title += " (on the server)"; e.status = st.running ? "running" : "ok"; e.hash = st.graph_hash; S.hist.unshift(e); }
+    if (!e) { e = newEntry(st.family, st.image ? "live" : "sample"); if (st.image) e.title = st.spec.title; e.title += " (on the server)"; e.status = st.running ? "running" : "ok"; e.hash = st.graph_hash; S.hist.unshift(e); }
     S.cur = S.live = e.id;
     if (st.running) { S.run = { entryId: e.id, kind: "new" }; S.mid = "board"; listen(); }
     else { if (e.status === "running") e.status = st.sizes.every(s => s.ok) ? "ok" : "bad"; S.mid = "model"; }

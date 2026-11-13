@@ -4,6 +4,52 @@ A live record of what changed and why, newest first. Every change adds an entry 
 (see `AGENTS.md`). Each entry says what changed for someone using caddy, what was verified, and what is known not to
 work yet. Earlier work isn't itemised here.
 
+## Image → CAD: a picture becomes a parametric SolidCraft design, judged on SMLib
+
+- **What changed.**
+  - **Drop a picture on New** (PNG or JPEG of one object, with an optional note: what it is, known sizes). The LLM
+    models it in [SolidCraft](https://github.com/tangency-labs/solidcraft) through SolidCraft's MCP server: named
+    parameters, a feature timeline, mirrors and patterns. You get `model.sc` to open in SolidCraft (**.sc ↓** in the
+    header) and the STEP file.
+  - **The kernel still decides.** After every change caddy exports the design, reads it into SMLib and measures it.
+    `finish` is refused until six checks pass: the export is intact (SMLib's volume matches SolidCraft's), the object
+    is symmetric, no feature fails, there are at least three named parameters, every parameter rebuilds and moves the
+    geometry, and the outline overlaps the picture by 0.7.
+  - **Symmetry is assumed.** The model is told to treat chairs, tables, couches, aircraft and the like as mirror
+    symmetric, with hidden sides mirroring the visible ones, and to use what it knows about the object (equal legs,
+    level tops, usual sizes). It must declare the mirror plane; SMLib then mirrors points on the surface and reports
+    how far they land from the model, and where. "Not symmetric" is accepted only with what in the picture shows it.
+  - **Whiteboard.** Four new cards: the picture, what the model says it shows (with its mirror plane), each
+    SolidCraft build step with the kernel's render and check dots, and SolidCraft's outline overlay.
+  - **Values without the model.** The Feature tab lists SolidCraft's parameters. Moving one rebuilds the timeline
+    in SolidCraft inside a checkpoint, judges the result on SMLib and puts the design back; Apply keeps it and
+    rewrites the saved files. No tokens.
+  - **Command line:** `python -m caddy.solidcraft chair.jpg --hint "dining chair, seat 450 mm high"` writes
+    `model.sc`, `model.step` and `run.jsonl`, and exits 0 only when the kernel accepted the model.
+  - Asking for a change in plain words works on an image model too (same SolidCraft session, a new conversation).
+  - SolidCraft is optional. Without `solidcraft-cli` (on `PATH` or `SOLIDCRAFT_CLI`) the rest of caddy is unchanged
+    and dropping a picture says what to install.
+- **Verified.**
+  - `pytest -q tests packages/smlibquery/tests`: 135 passed, 3 skipped, 127.9 s, with SolidCraft 0.41.0 built from
+    source. Without `solidcraft-cli`: the image file gives 7 passed, 4 skipped.
+  - Symmetry measure on SMLib: 0 mm for a plate with holes on both sides; 4.86 mm for a hole on one side, located on
+    that hole; about 0.1 s per part.
+  - On the real `solidcraft-cli mcp`: a table with legs on one side is refused (symmetric ✗, 405 mm), an unused
+    parameter is refused, the repaired table is accepted (outline overlap 0.97), and `h` 450 → 600 mm gives an SMLib
+    bounding box 600 mm high. One judgement (export, import, six checks) took about 0.2 s on that model.
+  - In Chromium at 1600×1000: picture dropped, ten cards drawn, model upright in the viewer, a value
+    previewed and applied, no page errors. `node tests/e2e/smoke.mjs` still passes (119.5 s).
+- **Not yet.**
+  - **No live LLM run.** This was built without an API key. A scripted stand-in played the model in every test, so
+    Claude reading a real photo, its proportions and its cost are untested and there is no recorded run to replay.
+  - The 0.7 outline threshold is a guess, not calibrated. SolidCraft's comparison expects the object on a plain
+    backdrop; a cluttered photo may never pass. `--min-overlap` or `CADDY_IMAGE_MIN_OVERLAP` lowers it.
+  - One picture can't give depth or hidden sides; those are the model's assumptions (listed on its card), unchecked.
+  - The imported solids are stock bodies: the Feature tab shows bodies and parameters, not SolidCraft's timeline,
+    faces aren't named by feature, and the Feature tab's small side drawing lies the model on its side.
+  - SolidCraft isn't in the Docker image or in CI, so the four tests that need it don't run there.
+  - Assemblies with placed components, and images over 5 MB, aren't handled.
+
 ## v1.0.0: one commit in a fresh repo
 
 - **What changed.**

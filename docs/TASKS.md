@@ -19,7 +19,10 @@ Requirement IDs (K, V, A, U, I) refer to [SPEC.md](SPEC.md).
 - [x] CI on every push (`.github/workflows/test.yml`)
 - [x] Spec docs (this folder), [Notes](../Notes.md), [Process](PROCESS.md)
 
+- [x] Image → CAD through SolidCraft's MCP server, judged on SMLib (I4, ADR-13): loop, checks, UI, CLI
+
 ## In progress
+- [ ] Image → CAD: record live LLM runs on real photos (chair, table, bracket); tune the outline threshold on them
 - [ ] Demo video and a GIF for the README
 
 ## Next
@@ -32,6 +35,10 @@ Requirement IDs (K, V, A, U, I) refer to [SPEC.md](SPEC.md).
 - [ ] Stability as an optional check: a family can opt in to "stands on this body at μ" in its checks spec
 - [ ] Split `app.js` into modules
 - [ ] Re-record the three runs whose logs were never saved (`demo_build_and_repair`, `nipple_cq_build`, `gripper_build`)
+
+- [ ] Image → CAD: SolidCraft in the Docker image; CI job that installs it so the integration tests run there
+- [ ] Image → CAD: show SolidCraft's timeline (features, sketches) in the Feature tab instead of the imported bodies
+- [ ] Image → CAD: several pictures of one object (front and side), so depth is measured instead of assumed
 
 ## Later
 - [ ] Mesh → CAD on SMLib: arbitrary workplanes, line/arc sketches, extrude, revolve in smlibquery; drop a mesh on New (I3)

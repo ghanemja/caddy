@@ -28,16 +28,17 @@
   <section id="mid">
     <div class="pane" id="p-new">
       <button class="bignew" id="btn-new"><span class="plus">+</span><span>New</span></button>
-      <div class="hint">drop in a scan or a catalogue, or start from a sample</div>
+      <div class="hint">drop in a picture, a scan or a catalogue, or start from a sample</div>
     </div>
 
     <div class="pane" id="p-choose">
       <div class="row between"><div class="h big">New object</div><button class="btn" id="choose-x">×</button></div>
       <label class="drop" id="dropzone">
-        <input type="file" id="file" accept=".stl,.ply,.obj,.csv" hidden>
-        <div class="big">Drop a scan (.stl .ply .obj) or a catalogue (.csv)</div>
-        <div class="hint-s">or click to choose a file</div>
+        <input type="file" id="file" accept=".png,.jpg,.jpeg,.stl,.ply,.obj,.csv" hidden>
+        <div class="big">Drop a picture of an object (.png .jpg), a scan (.stl .ply .obj) or a catalogue (.csv)</div>
+        <div class="hint-s">or click to choose a file · a picture becomes a parametric SolidCraft model, judged on SMLib</div>
       </label>
+      <input type="text" id="img-hint" class="imghint" placeholder="For a picture (optional): what it is, known sizes, what the picture hides" aria-label="About the picture">
       <div class="h" style="margin-top:6px">…or start from a sample</div>
       <div id="samples"></div>
     </div>
@@ -73,6 +74,7 @@
       <div class="dhead">
         <div><div class="dtitle" id="d-title"></div><div class="hint-s" id="d-sub"></div></div>
         <div class="row"><span class="chip" id="d-status"></span><select id="d-size" class="chip" title="size"></select>
+          <button class="btn sm" id="d-sc" style="display:none" title="The parametric SolidCraft design (open it in SolidCraft)">.sc ↓</button>
           <button class="btn sm" id="d-usd" title="Export the selected size as USD (exact BRep)">USD ↓</button></div>
       </div>
       <div class="tabs" id="dtabs">

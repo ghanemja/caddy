@@ -59,6 +59,22 @@ smlibquery, and an earlier mesh → CAD prototype ran on OpenCascade. **Decision
 reuses the same kernel layer, agent, UI and smlibquery; the OpenCascade prototype was removed so everything runs on
 SMLib. **Consequences.** One port, one test suite, one set of fixes; mesh → CAD on SMLib is future work (TASKS.md).
 
+### ADR-13 · SolidCraft models a picture, SMLib still decides
+**Context.** A picture of a chair or a table isn't a turned part or a catalogue row, and smlibquery has no sketches,
+constraints, fillets or mirrors to model one with. [SolidCraft](https://github.com/tangency-labs/solidcraft) is an
+open-source parametric CAD (sketch solver, feature timeline, named parameters) that agents drive through an MCP
+server, and its `.sc` file is a design an engineer can open and keep editing. **Decision.** For image → CAD the LLM
+models in SolidCraft (`solidcraft-cli mcp`, headless, one folder it may write to). caddy stays the judge (ADR-4):
+after every change it exports STEP, reads it into SMLib and runs its ordinary checks on those solids, plus what only
+SolidCraft can report (failing features, whether each parameter rebuilds and moves the geometry, the outline against
+the picture), each measured by caddy through SolidCraft's commands and never taken from the model's word. Mirror
+symmetry is the default the model is told to assume and the kernel checks; "not symmetric" needs evidence from the
+picture. **Consequences.** A second modeller beside smlibquery (ADR-11 still holds for the kernel that judges: one).
+SolidCraft is an optional dependency found at run time (`SOLIDCRAFT_CLI` or `PATH`); without it everything else works
+and New says what is missing. The imported solids are stock bodies, so faces aren't labelled by feature and the
+Feature tab lists bodies, not SolidCraft's timeline. One picture can't fix depth or hidden sides: those come from the
+model's knowledge of the object and are recorded as assumptions, not verified.
+
 ### ADR-12 · Stability from the kernel, friction from a library, advisory only
 **Context.** Designs that must stand or stay put (a stand, a bottle, a base) need a check Claude can act on, but a
 physics simulator is too heavy for the loop. The behaviors project (SimReady objects, simulated pokes and tips) holds

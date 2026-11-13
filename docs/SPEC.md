@@ -51,4 +51,5 @@ Paths are relative to the repo root.
 |---|---|---|---|---|
 | I1 | Catalogue in (CSV). | One model, every row, all checked. | `data/*.csv` | ✅ |
 | I2 | Scan in (turned parts). | Every scan point within tolerance of the solid. | `caddy/scan/` | ✅ |
+| I4 | Picture in (PNG/JPEG of one object) → parametric SolidCraft design. | The LLM models it in SolidCraft over MCP; SMLib reads the STEP export back and `finish` is refused until the solids are closed, the declared mirror symmetry holds, every named parameter rebuilds and moves the geometry, and the outline overlaps the picture. | `caddy/solidcraft/` | 🟡 loop, judge and UI built and tested with a scripted stand-in; no live LLM run recorded yet |
 | I3 | Mesh in (STL/OBJ/GLB) → parametric script on SMLib. | The script runs on smlibquery and is checked against the mesh. | not started | ⬜ (an earlier OpenCascade prototype was removed) |
