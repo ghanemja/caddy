@@ -201,6 +201,8 @@ class ImageSession(Session):
             return None
         f["volume_mm3"] = float((m.get("total") or {}).get("volume_mm3") or sum(b["volume_mm3"] for b in solids))
         f["bodies"] = [b.get("name") for b in bodies]
+        f["unmeasured"] = [dict(name=b.get("name"), error=str(b.get("error"))[:160]) for b in m.get("bodies", [])
+                           if b.get("error")]
         self._timeline(f)
         self._parameters(f, drive)
         if not drive:
@@ -345,8 +347,11 @@ class ImageSession(Session):
             return "\n      " + (f.get("picture_note") or "compare the outlines (screenshot from the picture's view) and "
                                  "fix the proportions that differ, or correct picture_view in describe_object.")
         if c["id"] == "export_intact":
-            return (f"\n      SolidCraft {f.get('volume_mm3')} mm³ vs SMLib {round(f.get('smlib_volume_mm3', 0), 2)} mm³: "
-                    "a body did not survive the STEP export as a closed solid.")
+            bad = f.get("unmeasured") or []
+            return (f"\n      SolidCraft {f.get('volume_mm3')} mm³ vs SMLib {round(f.get('smlib_volume_mm3', 0), 2)} mm³. "
+                    + ("SolidCraft could not measure " + "; ".join(f"{b['name']} ({b['error']})" for b in bad[:4])
+                       + ": rebuild that body another way (e.g. its own mirror or box feature)." if bad else
+                       "A body did not survive the STEP export as a closed solid."))
         return ""
 
     def family_table(self) -> str:

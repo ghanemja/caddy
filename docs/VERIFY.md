@@ -38,6 +38,12 @@ tests that need SolidCraft don't run in CI (it isn't installed there); they ran 
 built from source. The whiteboard cards, the viewer and the Feature-tab preview and Apply for an image model were
 checked in a scripted Chromium run at 1600×1000 with no page errors, not by `tests/e2e/smoke.mjs`.
 
+**Image → CAD, tried by hand, not automated:** four blind cases (chair, stool, bracket, desk), with an LLM in a
+terminal playing the model on three.js renders whose dimensions were hidden; results and numbers are in the
+[changelog](CHANGELOG.md). Three were accepted. The desk was refused although correct: the outline check loses a
+white part on a light backdrop and scores higher when that part is left out. The outline check also ignores holes
+and interior detail. None of this is asserted by a test.
+
 **Feature-tab drawing and break pop-up** (fixed frame, view that shows the change, the inline Apply under the moved
 value, pop-up from there) were checked by hand in a scripted browser on the gripper and Roadster, not by an automated
 assertion; `tests/e2e/smoke.mjs` only checks the tab renders without errors.

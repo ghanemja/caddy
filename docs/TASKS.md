@@ -36,6 +36,8 @@ Requirement IDs (K, V, A, U, I) refer to [SPEC.md](SPEC.md).
 - [ ] Split `app.js` into modules
 - [ ] Re-record the three runs whose logs were never saved (`demo_build_and_repair`, `nipple_cq_build`, `gripper_build`)
 
+- [ ] Image → CAD: an outline check that survives light parts on light backdrops and can't be raised by deleting a part (own segmentation, or compare edges instead of filled outlines); compare interior holes too
+- [ ] Image → CAD: report SolidCraft's unmeasurable mirrored box (40 × 40 × 900 at [170, 170, 0] across YZ, 0.41.0) upstream
 - [ ] Image → CAD: SolidCraft in the Docker image; CI job that installs it so the integration tests run there
 - [ ] Image → CAD: show SolidCraft's timeline (features, sketches) in the Feature tab instead of the imported bodies
 - [ ] Image → CAD: several pictures of one object (front and side), so depth is measured instead of assumed

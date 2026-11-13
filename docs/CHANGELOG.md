@@ -4,6 +4,40 @@ A live record of what changed and why, newest first. Every change adds an entry 
 (see `AGENTS.md`). Each entry says what changed for someone using caddy, what was verified, and what is known not to
 work yet. Earlier work isn't itemised here.
 
+## Image → CAD tried on five blind test cases; the kernel report names bodies SolidCraft can't measure
+
+- **What changed.**
+  - When SolidCraft can't measure a body, the `export_intact` hint now names the body and SolidCraft's error and
+    says to rebuild it another way. Before, it blamed the STEP export.
+- **Verified.** With no API key, an LLM in a terminal played the model by hand through the same tools
+  (`ImageSession.call`), on pictures another agent rendered in three.js (perspective, shadows, studio backdrop) with
+  dimensions it chose and kept hidden until scoring.
+  - **Chair: accepted**, outline 0.92 on the first camera guess. Guess vs truth: 420/438 wide, 420/412 deep, 900/912
+    high, seat 450/463. The first build was refused by `export_intact` (16.5 % volume gap): SolidCraft 0.41.0 cannot
+    measure a 40 × 40 × 900 box mirrored across YZ ("invalid B-rep record"), though it exports it correctly. Building
+    that post as its own box passed. With one post missing the outline read 0.68, just under the 0.7 limit.
+  - **Stool: accepted**, all six checks on the first build (circular pattern of legs, a mirrored stretcher), outline
+    0.81, then 0.88 after two `set_parameter` calls. Final 340/316 seat, 660/618 high, 85/83 leg offset.
+  - **Bracket: accepted**, one joined body with four cut holes, outline 0.76, then 0.85 after refining the camera.
+    Proportions close; absolute size about 30 % too big (115/86, 95/64, 45/38 mm).
+  - **Desk (not symmetric): refused** at outline 0.40, with a model within 1.2 % of the truth on its overall sizes.
+    "none" was refused without evidence and accepted with it.
+  - **Wrong models are refused:** a stool for the chair picture reads 0.42, a plain 420 × 420 × 900 block 0.56.
+  - `pytest -q tests/test_image_cad.py`: 11 passed.
+- **Not yet.**
+  - **A light part on a light backdrop breaks the outline check.** SolidCraft's comparison dropped the desk's white
+    pedestal from the picture's outline, so the correct model failed, and leaving the pedestal out raised the score
+    (0.40 → 0.66). The check can reward deleting a real part. Only a lower `--min-overlap` gets such a picture through.
+  - **The outline check is loose.** It fills holes, so the chair's slats and the bracket's holes are never compared,
+    and a visibly wrong camera still passed at 0.76. A block scores 0.56 against a threshold of 0.7.
+  - **Nothing gives scale.** Furniture came out within 1–8 % from typical sizes; the bracket did not. A known size in
+    the note is the only fix today.
+  - **The symmetry default hid a real detail:** the stool's two stretchers sit 32 mm apart in height and were
+    modelled level.
+  - The shelf picture was not modelled. The pictures are renders, not photographs: Wikimedia refused automated
+    downloads here. Still no run through the API.
+  - The SolidCraft mirror bug is not reported upstream.
+
 ## Image → CAD: a picture becomes a parametric SolidCraft design, judged on SMLib
 
 - **What changed.**
