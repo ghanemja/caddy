@@ -4,6 +4,20 @@ A live record of what changed and why, newest first. Every change adds an entry 
 (see `AGENTS.md`). Each entry says what changed for someone using caddy, what was verified, and what is known not to
 work yet. Earlier work isn't itemised here.
 
+## README: whiteboards of the four image → CAD test cases
+
+- **What changed.** The README shows the whiteboard of each test case under the results table
+  (`docs/media/image-cad-wb-{chair,desk,stool,bracket}.png`, 135–182 KB each): chair and desk full width, stool and
+  bracket side by side.
+- **Verified.** Each board came from dropping the picture on New in Chromium (2100×1700) with the recorded tool
+  calls replayed in place of the LLM; SolidCraft rebuilt each step and SMLib judged it again. Verdicts match the
+  hand-driven runs (chair, stool, bracket accepted; desk refused at 40 %). No page errors.
+- **Not yet.**
+  - The replays are trimmed: repeated measurements and most of the bracket's camera sweep are left out, and the
+    desk's closing `finish` was added to show the refusal. Card times are replay times, not modelling times.
+  - Only the board is shown, because the page's token and cost readouts hold the stand-in's placeholder numbers.
+  - The replay script lives outside the repo.
+
 ## README: the four image → CAD test cases, with their picture
 
 - **What changed.** The README's picture → CAD section now shows the four test cases: a sheet with each picture,

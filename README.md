@@ -169,6 +169,23 @@ scoring. These are renders, not photographs, and not runs through the API.
 | Bracket | accepted | 0.76, then 0.85 after refining the camera | 115/86, 95/64: shape right, 30–50 % too big |
 | Desk (not symmetric) | **refused** | 0.40 | 1400/1384 wide, 740/742 high: the model is right |
 
+The whiteboards of those runs, with the recorded tool calls replayed through the page (the exploratory calls are
+left out; the kernel verdicts and renders are re-measured, not stored):
+
+*Chair.* Built, refused (`export intact` ✗: SolidCraft can't measure the mirrored post), a second mirror that
+doesn't help, undone, the post rebuilt as its own box, accepted.
+
+![Whiteboard of the chair run](docs/media/image-cad-wb-chair.png)
+
+*Desk.* "Not symmetric" refused without evidence, accepted with it; the outline reads 40 % with the correct model
+and 66 % with the pedestal left out; `finish` refused.
+
+![Whiteboard of the desk run](docs/media/image-cad-wb-desk.png)
+
+| Stool | Bracket |
+|---|---|
+| ![Whiteboard of the stool run](docs/media/image-cad-wb-stool.png) | ![Whiteboard of the bracket run](docs/media/image-cad-wb-bracket.png) |
+
 - **What worked.** The chair's first build was refused because SolidCraft 0.41.0 could not measure one mirrored
   post (a reproducible bug; it exports the post correctly), and rebuilding that post passed. "Not symmetric" was
   refused without evidence and accepted with it. Wrong models were refused: a stool for the chair picture scored
