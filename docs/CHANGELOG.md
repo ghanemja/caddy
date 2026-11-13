@@ -4,7 +4,7 @@ A live record of what changed and why, newest first. Every change adds an entry 
 (see `AGENTS.md`). Each entry says what changed for someone using caddy, what was verified, and what is known not to
 work yet. Earlier work isn't itemised here.
 
-## Image → CAD tried on five blind test cases; the kernel report names bodies SolidCraft can't measure
+## Image → CAD tried on four blind test cases; the kernel report names bodies SolidCraft can't measure
 
 - **What changed.**
   - When SolidCraft can't measure a body, the `export_intact` hint now names the body and SolidCraft's error and
