@@ -4,6 +4,15 @@ A live record of what changed and why, newest first. Every change adds an entry 
 (see `AGENTS.md`). Each entry says what changed for someone using caddy, what was verified, and what is known not to
 work yet. Earlier work isn't itemised here.
 
+## README: the four image → CAD test cases, with their picture
+
+- **What changed.** The README's picture → CAD section now shows the four test cases: a sheet with each picture,
+  the model built from it, the verdict and guessed against true sizes (`docs/media/image-cad-cases.png`, 324 KB), a
+  results table, and what worked and what didn't.
+- **Verified.** The numbers are the ones measured in the entry below; nothing was re-run. The image path resolves.
+- **Not yet.** The sheet was assembled by a script outside the repo, so it can't be regenerated with one command.
+  The model renders in it are framed smaller than the pictures.
+
 ## Image → CAD tried on four blind test cases; the kernel report names bodies SolidCraft can't measure
 
 - **What changed.**

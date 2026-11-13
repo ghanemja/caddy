@@ -156,6 +156,30 @@ drawing sheets as any caddy object. Moving a value in the Feature tab rebuilds t
 the result on SMLib before you keep it, with no model call. This is tested end to end with a scripted stand-in for
 the model; a live run on a real photo hasn't been recorded yet ([Verification](docs/VERIFY.md)).
 
+*Tried on four test cases.* With no API key to hand, an LLM in a terminal played the model through the same tools,
+on pictures rendered by a separate agent (perspective, shadows, studio backdrop) whose dimensions stayed hidden until
+scoring. These are renders, not photographs, and not runs through the API.
+
+![Four image → CAD test cases: the picture given, the SolidCraft model built from it, the kernel's verdict and guessed against true dimensions](docs/media/image-cad-cases.png)
+
+| Case | Verdict | Outline overlap | Guess vs truth (mm) |
+|---|---|---|---|
+| Chair | accepted | 0.92 | 420/438 wide, 900/912 high, seat 450/463 |
+| Stool | accepted | 0.81, then 0.88 after two parameter changes | seat Ø 340/316, height 660/618 |
+| Bracket | accepted | 0.76, then 0.85 after refining the camera | 115/86, 95/64: shape right, 30–50 % too big |
+| Desk (not symmetric) | **refused** | 0.40 | 1400/1384 wide, 740/742 high: the model is right |
+
+- **What worked.** The chair's first build was refused because SolidCraft 0.41.0 could not measure one mirrored
+  post (a reproducible bug; it exports the post correctly), and rebuilding that post passed. "Not symmetric" was
+  refused without evidence and accepted with it. Wrong models were refused: a stool for the chair picture scored
+  0.42, a plain block 0.56, against a limit of 0.7.
+- **What didn't.** The desk is the important one: the outline check dropped its white pedestal against the light
+  backdrop, so a correct model failed, and leaving the pedestal out *raised* the score (0.40 → 0.66). The outline
+  check also fills holes, so slats and bolt holes are never compared, and a visibly wrong camera still passed at
+  0.76. Nothing in a picture gives scale: furniture landed within 1–8 % from typical sizes, the bracket didn't (put
+  one known size in the note). And the symmetry default levelled the stool's two stretchers, which really sit 32 mm
+  apart in height.
+
 **6. Freeform on the kernel.** Two ops CadQuery doesn't have: `skin()` lofts a smooth body through cross-sections, and
 `wing()` makes NACA airfoil panels. A Roadster-style coupe from two photos, then the flying car, which came from
 Zach's post on X: "the flying cars of the future will be designed by agents." Lofted bodies are where SMLib is
